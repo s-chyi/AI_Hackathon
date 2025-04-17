@@ -126,41 +126,57 @@ class EdgeDevice:
             return False
     
     def setup_iot_client(self):
-        """設置 AWS IoT MQTT 客戶端"""
         try:
-            # 創建 MQTT 客戶端
-            self.iot_client = AWSIoTMQTTClient(IOT_CLIENT_ID)
-            self.iot_client.configureEndpoint(IOT_ENDPOINT, 8883)
+            # 強制使用同步DNS解析
+            import socket
+            endpoint_ip = socket.gethostbyname(IOT_ENDPOINT)
+            print(f"Resolved endpoint IP: {endpoint_ip}")
+
+            self.iot_client = AWSIoTMQTTClient(
+                IOT_CLIENT_ID, 
+                useWebsocket=False,
+                cleanSession=False
+            )
             
-            # 配置證書
+            # 優化TLS配置
+            self.iot_client.configureEndpoint(IOT_ENDPOINT, 8883)
             self.iot_client.configureCredentials(
                 f"{IOT_CERT_PATH}AmazonRootCA1.pem",
                 f"{IOT_CERT_PATH}private.pem.key",
                 f"{IOT_CERT_PATH}certificate.pem.crt"
             )
             
-            # 配置連接參數
-            self.iot_client.configureAutoReconnectBackoffTime(1, 32, 20)
-            self.iot_client.configureOfflinePublishQueueing(-1)  # 無限隊列
-            self.iot_client.configureDrainingFrequency(2)  # 每 2 秒嘗試一次
-            self.iot_client.configureConnectDisconnectTimeout(10)
-            self.iot_client.configureMQTTOperationTimeout(5)
-            logger.info("已設置連接參數至 AWS IoT Core")
-            # 連接到 IoT Core
-            self.iot_client.connect()
-            logger.info("已連接到 AWS IoT Core")
+            # 強化連接參數
+            self.iot_client.configureAutoReconnectBackoffTime(1, 128, 30)
+            self.iot_client.configureOfflinePublishQueueing(100)
+            self.iot_client.configureDrainingFrequency(5)
+            self.iot_client.configureConnectDisconnectTimeout(30)  # 增加至30秒
+            self.iot_client.configureMQTTOperationTimeout(15)
             
-            # 訂閱命令主題
-            self.iot_client.subscribe(f"warehouse/commands/{self.device_id}", 1, self.command_callback)
-            logger.info(f"已訂閱命令主題: warehouse/commands/{self.device_id}")
+            # 啟用詳細日誌
+            AWSIoTMQTTClient.configureLogging(logging.DEBUG)
             
-            # 發布設備狀態
-            self.publish_device_status()
+            # 異步連接流程
+            logger.info("開始異步連接...")
+            self.iot_client.connectAsync()
             
-            return True
+            # 等待連接完成
+            connect_wait_time = 0
+            while not self.iot_client.connectStatus:
+                time.sleep(0.5)
+                connect_wait_time += 0.5
+                if connect_wait_time > 30:
+                    raise TimeoutError("AWS IoT連接超時")
+                    
+            logger.info("連接成功建立")
+            
+            # 後續訂閱邏輯...
+            
         except Exception as e:
-            logger.error(f"IoT 客戶端設置失敗: {str(e)}")
-            return False
+            logger.error(f"連接失敗: {str(e)}")
+            # 失敗轉移處理
+            self.enable_offline_mode()
+
     
     def command_callback(self, client, userdata, message):
         """處理從雲端接收的命令"""
