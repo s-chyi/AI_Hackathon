@@ -33,10 +33,10 @@ logger = logging.getLogger("EdgeDevice")
 # AWS 配置
 S3_BUCKET = 'warehouse-monitoring-data'
 S3_FOLDER = 'images/'
-S3_REGION = 'us-west-2'
-IOT_ENDPOINT = 'your-iot-endpoint.iot.us-west-2.amazonaws.com'  # 請替換為您的 IoT Core 端點
+S3_REGION = 'ap-southeast-2'
+IOT_ENDPOINT = 'a1ltiqt9w7oruy-ats.iot.ap-southeast-2.amazonaws.com'  # 請替換為您的 IoT Core 端點
 IOT_TOPIC = 'warehouse/events'
-IOT_CLIENT_ID = 'jetson-edge-device-001'
+IOT_CLIENT_ID = 'icam-540'
 IOT_CERT_PATH = 'certificates/'  # 存放 IoT 證書的路徑
 
 # 檢測設置
