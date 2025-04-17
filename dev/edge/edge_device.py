@@ -47,7 +47,7 @@ AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 S3_BUCKET = os.getenv('S3_BUCKET')
 S3_FOLDER = os.getenv('S3_FOLDER', 'images/') # 提供默認值
 S3_REGION = os.getenv('S3_REGION')
-DEVICE_ID = os.getenv('DEVICE_ID', f'jetson-{int(time.time())}') # 提供默認值
+DEVICE_ID = os.getenv('DEVICE_ID', f'icam-540')
 
 # 檢測設置
 CONFIDENCE_THRESHOLD = 0.5
@@ -426,7 +426,7 @@ def main():
     # 創建臨時圖像目錄
     os.makedirs("temp_images", exist_ok=True)
     # 檢查必要的環境變數
-    required_vars = ['AWS_ACCESS_KEY', 'AWS_SECRET_ACCESS_KEY', 'S3_BUCKET', 'S3_REGION', 'DEVICE_ID']
+    required_vars = ['AWS_ACCESS_KEY', 'AWS_SECRET_ACCESS_KEY', 'S3_BUCKET', 'S3_REGION']
     if not all(os.getenv(var) for var in required_vars):
         logger.error(f"啟動失敗：缺少必要的環境變數。請檢查 .env 文件是否包含: {', '.join(required_vars)}")
         return
