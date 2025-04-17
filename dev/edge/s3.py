@@ -9,154 +9,115 @@ import boto3
 from botocore.exceptions import NoCredentialsError
 import os
 from datetime import datetime
+from dotenv import load_dotenv
+import queue
+import threading
 
-# AWS S3 Configuration - Set to your specific bucket
-S3_BUCKET = 'nick-ap-s3'
-S3_FOLDER = 'images/'
-S3_REGION = 'ap-southeast-2'  # Change this if your bucket is in a different region
+load_dotenv(verbose=True)
+
+AWS_ACCESS_KEY = os.getenv('AWS_ACCESS_KEY')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+S3_BUCKET = os.getenv('S3_BUCKET')
+S3_FOLDER = os.getenv('S3_FOLDER')
+S3_REGION = os.getenv('S3_REGION')
 
 # Detection settings
-PERSON_CLASS_ID = 1  # In COCO dataset, person is class 1
+PERSON_CLASS_ID = 1
 CONFIDENCE_THRESHOLD = 0.5
-COOLDOWN_SECONDS = 5  # Time between captures to avoid multiple uploads of the same person
+COOLDOWN_SECONDS = 5
 
 def resize_for_display(image, max_width=1280, max_height=720):
-    """Resize image for display purposes while maintaining aspect ratio"""
     h, w = image.shape[:2]
-    
-    # Calculate the resize factor
-    scale = min(max_width / w, max_height / h)
-    
-    # Only resize if the image is larger than the max dimensions
-    if scale < 1:
-        new_w, new_h = int(w * scale), int(h * scale)
-        resized = cv2.resize(image, (new_w, new_h))
-        return resized
-    return image
+    scale = min(max_width/w, max_height/h)
+    return cv2.resize(image, (int(w*scale), int(h*scale))) if scale < 1 else image
 
-def upload_to_s3(local_file, s3_key):
-    """Upload a file to the S3 bucket"""
-    s3_client = boto3.client('s3', region_name=S3_REGION)
-    try:
-        s3_client.upload_file(local_file, S3_BUCKET, s3_key)
-        print(f"Upload Successful: s3://{S3_BUCKET}/{s3_key}")
-        return True
-    except FileNotFoundError:
-        print("The file was not found")
-        return False
-    except NoCredentialsError:
-        print("Credentials not available")
-        return False
-    except Exception as e:
-        print(f"Error uploading to S3: {str(e)}")
-        return False
+def upload_worker(q, s3_client):
+    while True:
+        task = q.get()
+        if task is None: break
+        try:
+            image_data, s3_key = task
+            s3_client.put_object(Bucket=S3_BUCKET, Key=s3_key, Body=image_data)
+            print(f"Uploaded: s3://{S3_BUCKET}/{s3_key}")
+        except Exception as e:
+            print(f"Upload failed: {str(e)}")
+        q.task_done()
 
 def detect_objects():
-    # Load the detection network
+    # Initialize S3 client and upload queue
+    s3_client = boto3.client('s3',
+        region_name=S3_REGION,
+        aws_access_key_id=AWS_ACCESS_KEY,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+    )
+    upload_queue = queue.Queue()
+    thread = threading.Thread(target=upload_worker, args=(upload_queue, s3_client))
+    thread.daemon = True
+    thread.start()
+
+    # Initialize detection network
     net = jetson.inference.detectNet("ssd-mobilenet-v2", threshold=CONFIDENCE_THRESHOLD)
     
-    # Open the camera using OpenCV with /dev/video10
-    cap = cv2.VideoCapture(10)  # Use 10 for /dev/video10
-    
-    # Set camera properties if needed
+    # Optimized video capture with MJPEG encoding
+    cap = cv2.VideoCapture(10)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    cap.set(cv2.CAP_PROP_FORMAT, -1)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M','J','P','G'))
     
     if not cap.isOpened():
-        print("Error: Could not open video device /dev/video10")
+        print("Error opening video device")
         return
-    
+
     last_upload_time = 0
     
     while cap.isOpened():
-        # Capture frame from OpenCV
         ret, frame = cap.read()
-        if not ret:
-            print("Failed to capture image from /dev/video10")
-            time.sleep(0.2)
-            continue
-            
-        # Convert OpenCV BGR image to CUDA format for Jetson Inference
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        cuda_img = jetson.utils.cudaFromNumpy(frame_rgb)
-        
+        if not ret: continue
+
+        # Convert frame to CUDA (optimized single-step conversion)
+        cuda_img = jetson.utils.cudaFromNumpy(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
         # Perform detection
         detections = net.Detect(cuda_img)
         
         person_detected = False
         current_time = time.time()
-        
-        # Process and display detections
-        for detection in detections:
-            class_id = detection.ClassID
-            confidence = detection.Confidence
-            left = int(detection.Left)
-            top = int(detection.Top)
-            right = int(detection.Right)
-            bottom = int(detection.Bottom)
-            
-            # Draw bounding box
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-            
-            # Add class label and confidence
-            class_name = net.GetClassDesc(class_id)
-            label = f"{class_name}: {confidence:.2f}"
-            cv2.putText(frame, label, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            
-            # Check if a person is detected with sufficient confidence
-            if class_id == PERSON_CLASS_ID and confidence >= CONFIDENCE_THRESHOLD:
+
+        # Process detections
+        for det in detections:
+            if det.ClassID == PERSON_CLASS_ID and det.Confidence >= CONFIDENCE_THRESHOLD:
                 person_detected = True
-        
-        # If a person is detected and cooldown period has passed, capture and upload
+                left, top, right, bottom = map(int, [det.Left, det.Top, det.Right, det.Bottom])
+                cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                cv2.putText(frame, f"Person: {det.Confidence:.2f}", 
+                           (left, top-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
+
+        # Async upload handling
         if person_detected and (current_time - last_upload_time) > COOLDOWN_SECONDS:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            local_filename = f"person_detected_{timestamp}.jpg"
-            s3_key = f"{S3_FOLDER}person_detected_{timestamp}.jpg"
-            
-            # Save the image locally
-            cv2.imwrite(local_filename, frame)
-            print(f"Person detected! Image saved as {local_filename}")
-            
-            # Upload to S3
-            if upload_to_s3(local_filename, s3_key):
-                last_upload_time = current_time
-                print(f"Image uploaded to s3://{S3_BUCKET}/{s3_key}")
-            
-            # Optional: Delete local file after upload
-            os.remove(local_filename)
-            print(f"Local file {local_filename} deleted")
+            s3_key = f"{S3_FOLDER}person_{timestamp}.jpg"
+            _, buffer = cv2.imencode('.jpg', frame)
+            upload_queue.put((buffer.tobytes(), s3_key))
+            last_upload_time = current_time
+
+        # Display handling
+        cv2.imshow("Detection", resize_for_display(frame, 800, 600))
         
-        # Resize frame for display (without affecting processing or saved image quality)
-        display_frame = resize_for_display(frame, max_width=800, max_height=600)
-        
-        # Display the resized frame
-        cv2.imshow("Object Detection", display_frame)
-        
-        # Handle key presses
+        # Key input handling
         key = cv2.waitKey(1)
-        if key == 27:  # ESC key
+        if key == 27:
             break
-        elif key == ord('s'):  # Press 's' to save image manually
+        elif key == ord('s'):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            manual_filename = f"manual_capture_{timestamp}.jpg"
-            s3_manual_key = f"{S3_FOLDER}manual_capture_{timestamp}.jpg"
-            
-            cv2.imwrite(manual_filename, frame)
-            print(f"Manually saved image to {manual_filename}")
-            
-            # Upload manual capture to S3
-            if upload_to_s3(manual_filename, s3_manual_key):
-                print(f"Manual capture uploaded to s3://{S3_BUCKET}/{s3_manual_key}")
-            
-            # Optional: Delete local file after upload
-            os.remove(manual_filename)
-            print(f"Local file {manual_filename} deleted")
-    
-    # Clean up
+            s3_key = f"{S3_FOLDER}manual_{timestamp}.jpg"
+            _, buffer = cv2.imencode('.jpg', frame)
+            upload_queue.put((buffer.tobytes(), s3_key))
+
+    # Cleanup
+    upload_queue.put(None)
     cap.release()
     cv2.destroyAllWindows()
-    print('end program')
+    print('Program terminated')
 
 if __name__ == "__main__":
     detect_objects()

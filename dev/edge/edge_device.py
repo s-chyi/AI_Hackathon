@@ -5,8 +5,8 @@
 """
 
 import cv2
-import jetson.inference
-import jetson.utils
+import jetson_inference
+import jetson_utils
 import numpy as np
 import time
 import boto3
@@ -16,27 +16,32 @@ import threading
 import queue
 import logging
 from datetime import datetime
+from dotenv import load_dotenv
 from botocore.exceptions import NoCredentialsError, ClientError
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
+
+load_dotenv(verbose=True)
 
 # 配置日誌
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("edge_device.log"),
+        logging.FileHandler("/logs/edge_device.log"),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger("EdgeDevice")
 
 # AWS 配置
-S3_BUCKET = 'warehouse-monitoring-data'
-S3_FOLDER = 'images/'
-S3_REGION = 'ap-southeast-2'
-IOT_ENDPOINT = 'a1ltiqt9w7oruy-ats.iot.ap-southeast-2.amazonaws.com'  # 請替換為您的 IoT Core 端點
-IOT_TOPIC = 'warehouse/events'
-IOT_CLIENT_ID = 'icam-540'
+AWS_ACCESS_KEY = os.getenv('AWS_ACCESS_KEY')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+S3_BUCKET = os.getenv('S3_BUCKET')
+S3_FOLDER = os.getenv('S3_FOLDER')
+S3_REGION = os.getenv('S3_REGION')
+IOT_ENDPOINT = os.getenv('IOT_ENDPOINT')  # 請替換為您的 IoT Core 端點
+IOT_TOPIC = os.getenv('IOT_TOPIC')
+IOT_CLIENT_ID = os.getenv('IOT_CLIENT_ID')
 IOT_CERT_PATH = 'certificates/'  # 存放 IoT 證書的路徑
 
 # 檢測設置
@@ -92,7 +97,13 @@ class EdgeDevice:
                 
             # 初始化 AWS 客戶端
             logger.info("連接 AWS S3...")
-            self.s3_client = boto3.client('s3', region_name=S3_REGION)
+            self.s3_client = boto3.client(
+                's3',
+                region_name=S3_REGION,
+                aws_access_key_id=AWS_ACCESS_KEY,
+                aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+            )
+
             
             # 初始化 IoT 客戶端
             self.setup_iot_client()
@@ -134,7 +145,7 @@ class EdgeDevice:
             self.iot_client.configureDrainingFrequency(2)  # 每 2 秒嘗試一次
             self.iot_client.configureConnectDisconnectTimeout(10)
             self.iot_client.configureMQTTOperationTimeout(5)
-            
+            logger.info("已設置連接參數至 AWS IoT Core")
             # 連接到 IoT Core
             self.iot_client.connect()
             logger.info("已連接到 AWS IoT Core")
