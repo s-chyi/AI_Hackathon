@@ -5,8 +5,8 @@
 """
 
 import cv2
-import jetson_inference
-import jetson_utils
+import jetson.inference
+import jetson.utils
 import numpy as np
 import time
 import boto3
@@ -27,7 +27,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("/logs/edge_device.log"),
+        logging.FileHandler("edge_device.log"),
         logging.StreamHandler()
     ]
 )
@@ -42,7 +42,7 @@ S3_REGION = os.getenv('S3_REGION')
 IOT_ENDPOINT = os.getenv('IOT_ENDPOINT')  # 請替換為您的 IoT Core 端點
 IOT_TOPIC = os.getenv('IOT_TOPIC')
 IOT_CLIENT_ID = os.getenv('IOT_CLIENT_ID')
-IOT_CERT_PATH = 'certificates/'  # 存放 IoT 證書的路徑
+IOT_CERT_PATH = '/home/icam-540/AI_Hackathon/dev/edge/certificates/'  # 存放 IoT 證書的路徑
 
 # 檢測設置
 CONFIDENCE_THRESHOLD = 0.5
