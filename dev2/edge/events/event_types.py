@@ -7,6 +7,9 @@ class EventType(Enum):
     定義邊緣端可以觸發的事件類型。
     """
     # 人員相關事件
+    UNKNOWN_PERSON_DETECTED = "UNKNOWN_PERSON_DETECTED" # 偵測到人員但無法識別
+    KNOWN_PERSON_DETECTED = "KNOWN_PERSON_DETECTED"   # 偵測到已知人員，包含人物 ID
+
     PERSON_DETECTED = "PERSON_DETECTED"           # 偵測到人員
     PERSON_IN_RESTRICTED_AREA = "PERSON_IN_RESTRICTED_AREA" # 人員進入限制區域 (需要區域設定)
     PERSON_FALL_DETECTED = "PERSON_FALL_DETECTED"     # 偵測到人員跌倒 (需要姿勢估計模型)
