@@ -2,6 +2,7 @@
 
 import jetson.inference
 import logging
+import os # 引入 os 模組用於路徑檢查
 
 logger = logging.getLogger(__name__)
 
@@ -31,29 +32,70 @@ class ModelManager:
             return None
 
         model_config = self.model_settings[model_type]
-        model_path = model_config.get('model_path')
         threshold = model_config.get('threshold', 0.5) # 預設閾值 0.5
 
-        if not model_path:
-            logger.error(f"模型類型 '{model_type}' 的 model_path 未設定。")
-            return None
+        net = None # 初始化模型實例為 None
 
         if model_type == "object_detection":
-            try:
-                # jetson.inference.detectNet 可以直接載入一些預訓練模型名稱，或指定檔案路徑
-                logger.info(f"載入物件偵測模型: {model_path}, 閾值: {threshold}")
-                net = jetson.inference.detectNet(model_path, threshold=threshold)
+            # 修正：優先檢查是否指定了內建模型名稱
+            built_in_name = model_config.get('built_in_model_name')
+            if built_in_name:
+                 try:
+                     logger.info(f"載入內建物件偵測模型: '{built_in_name}', 閾值: {threshold}")
+                     # 使用內建模型名稱作為第一個參數
+                     net = jetson.inference.detectNet(built_in_name, threshold=threshold)
+                     logger.info(f"內建物件偵測模型 '{built_in_name}' 載入成功。")
+                 except Exception as e:
+                    logger.error(f"載入內建物件偵測模型 '{built_in_name}' 時發生錯誤: {e}", exc_info=True)
+                    return None # 載入失敗，返回 None
+
+            else: # 如果沒有指定內建模型名稱，則嘗試載入自定義檔案
+                 model_file_path = model_config.get('model_file')
+                 labels_file_path = model_config.get('labels_file')
+                 input_blob = model_config.get('input_blob')
+                 output_cvg = model_config.get('output_cvg')
+                 output_bbox = model_config.get('output_bbox')
+
+                 if not model_file_path or not labels_file_path:
+                      logger.error(f"模型類型 '{model_type}' 需要設定 'built_in_model_name' 或 'model_file' 和 'labels_file'。")
+                      return None
+
+                 # 可選：檢查檔案是否存在
+                 if not os.path.exists(model_file_path):
+                      logger.error(f"模型檔案 '{model_file_path}' 不存在。請檢查路徑。")
+                      return None
+                 if not os.path.exists(labels_file_path):
+                      logger.error(f"標籤檔案 '{labels_file_path}' 不存在。請檢查路徑。")
+                      return None
+
+                 try:
+                     logger.info(f"載入物件偵測模型檔案: {model_file_path}, 標籤檔案: {labels_file_path}, 閾值: {threshold}")
+
+                     # 使用關鍵字參數 model= 和 labels= 載入自定義檔案
+                     net = jetson.inference.detectNet(
+                         model=model_file_path,
+                         labels=labels_file_path,
+                         threshold=threshold,
+                         input_blob=input_blob if input_blob else None,
+                         output_cvg=output_cvg if output_cvg else None,
+                         output_bbox=output_bbox if output_bbox else None
+                     )
+
+                     logger.info(f"物件偵測模型檔案 '{model_file_path}' 載入成功。")
+                 except Exception as e:
+                     logger.error(f"載入物件偵測模型檔案 '{model_file_path}' 時發生錯誤: {e}", exc_info=True)
+                     return None # 載入失敗，返回 None
+
+            # 如果 net 成功載入 (無論是內建還是自定義)
+            if net:
                 self.models[model_type] = net
-                logger.info(f"物件偵測模型 '{model_path}' 載入成功。")
+                # 確保 class_mapping 與模型標籤對應 (對於內建模型，GetClassDesc 可能有用)
+                # 對於自定義模型，class_mapping 必須與 labels_file 內容對應
+                # 如果使用內建模型，可能需要 GetClassDesc 來驗證 class_mapping 是否正確對應
+                # 例如：logger.debug(f"Model has {net.Get ); # 可選，用於檢查模型輸出的類別數量
                 return net
-            except Exception as e:
-                logger.error(f"載入物件偵測模型 '{model_path}' 時發生錯誤: {e}", exc_info=True)
-                return None
-        # 可擴展載入其他類型的模型，如分類模型、姿勢估計模型等
-        # elif model_type == "classification":
-        #     pass # 載入分類模型的邏輯
-        # elif model_type == "pose_estimation":
-        #     pass # 載入姿勢估計模型的邏輯
+
+        # ... 可擴展載入其他類型的模型 ...
         else:
             logger.warning(f"未知模型類型 '{model_type}'。")
             return None
