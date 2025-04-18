@@ -1,19 +1,19 @@
 # main.py
 
 import cv2
-import jetson.utils
-import jetson.inference
+import jetson_utils
+import jetson_inference
+
 import numpy as np
 import time
 import threading
 import queue
 import yaml
-import json
 import logging
 import signal # 用於處理停止信號
+import json   # 引入 json 用於解析命令 payload
 
 # 引入我們自己設計的模組
-from config import settings # 雖然 settings.yaml 在 config 文件夾，但我們可以直接載入其內容
 from utils.cuda_utils import numpy_to_cuda #, cuda_to_numpy # 如果需要轉回 numpy
 from utils.image_utils import resize_for_display, draw_detections #, draw_roi
 from utils.s3_uploader import S3Uploader
@@ -29,7 +29,7 @@ from detectors.person_detector import PersonDetector
 from detectors.cargo_detector import CargoDetector
 # 根據需要在 settings.yaml 中啟用或禁用其他偵測器，並在這裡引入和初始化
 
-# 配置 logging
+# 配置 logging (這部分可以在載入設定之前完成基礎配置)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -47,9 +47,10 @@ def main():
     logger.info("應用程式啟動...")
 
     # 1. 載入設定
+    settings = None # 初始化 settings 變數
     try:
         with open("config/settings.yaml", 'r', encoding='utf-8') as f:
-            settings = yaml.safe_load(f)
+            settings = yaml.safe_load(f) # <-- 設定檔內容載入到 settings 變數
         logger.info("設定檔案載入成功。")
     except FileNotFoundError:
         logger.error("設定檔案 config/settings.yaml 未找到！應用程式終止。")
@@ -63,6 +64,11 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
         logger.debug("已啟用 DEBUG 級別日誌。")
 
+    # 驗證關鍵設定是否存在
+    if 'aws' not in settings or 'camera' not in settings or 'models' not in settings:
+        logger.error("設定檔案中缺少必要的頂層區塊 (aws, camera, models)。應用程式終止。")
+        return
+    # 這裡可以添加更多對 settings 內容的檢查
 
     # 註冊信號處理器，以便在 Ctrl+C 時能優雅退出
     signal.signal(signal.SIGINT, signal_handler)
@@ -71,11 +77,20 @@ def main():
     # 2. 初始化模組
 
     # S3 上傳佇列和執行緒
-    s3_upload_queue = queue.Queue(maxsize=settings['aws']['s3']['upload_queue_maxsize'])
+    s3_settings = settings['aws'].get('s3', {}) # 使用 .get() 提供預設值，避免 KeyErorr
+    s3_upload_queue = queue.Queue(maxsize=s3_settings.get('upload_queue_maxsize', 10)) # 提供預設值
     s3_uploader = S3Uploader(settings['aws'], s3_upload_queue)
     s3_uploader.start() # 啟動 S3 上傳執行緒
 
     # AWS IoT 客戶端 (傳入命令處理回調函數)
+    iot_settings = settings['aws'].get('iot', {}) # 使用 .get() 提供預設值
+    if not all(k in iot_settings for k in ['endpoint', 'thing_name', 'cert_path', 'pri_key_path', 'root_ca_path']):
+        logger.error("AWS IoT 設定不完整 (缺少 endpoint, thing_name, 證書路徑等)。應用程式終止。")
+        # 在退出前嘗試清理資源
+        s3_uploader.stop()
+        s3_uploader.join()
+        return
+
     # command_handler 函數需要在 main 範圍內定義或引入
     def handle_cloud_command(topic, payload):
         logger.info(f"收到雲端命令 Topic: {topic}, Payload: {payload}")
@@ -87,31 +102,45 @@ def main():
             # 根據 command_type 調用相應的功能，例如：
             # if command_type == "set_threshold":
             #     new_threshold = command_data.get("threshold")
-            #     if new_threshold is not None:
-            #          # 更新模型閾值 (需要在 ModelManager 或 Inferencer 中提供更新方法)
-            #          # model_manager.get_model("object_detection").SetConfidenceThreshold(new_threshold)
-            #          logger.info(f"已更新偵測閾值為 {new_threshold}")
+            #     if new_threshold is not None and object_detector_inferencer: # 確保推論器存在
+            #          # 更新模型閾值 (需要在 Inferencer 中提供更新方法)
+            #          # 注意：jetson.inference 的 detectNet 沒有直接更新閾值的方法，可能需要重新載入模型或實現更複雜的邏輯
+            #          # 如果模型支援，可以在 ObjectDetector 類中添加一個方法來更新
+            #          # object_detector_inferencer.set_confidence_threshold(new_threshold)
+            #          logger.info(f"已接收更新偵測閾值命令，新值為 {new_threshold} (實際更新取決於模型和 Inferencer 的實現)")
             # elif command_type == "restart_detector":
             #      detector_name = command_data.get("detector")
-            #      # 實現重啟特定偵測器的邏輯
-            #      logger.info(f"請求重啟偵測器: {detector_name}")
+            #      # 實現重啟特定偵測器的邏輯 (例如通過 settings 更新 enabled 狀態)
+            #      logger.info(f"請求重啟偵測器: {detector_name} (此功能尚未完全實現)")
             # elif command_type == "capture_image":
             #      # 手動觸發拍照並上傳
-            #      s3_path = capture_manager.capture_and_upload_image("manual_capture")
-            #      logger.info(f"手動捕獲影像，S3 Path: {s3_path}")
+            #      # 確保 capture_manager 變數在作用域內
+            #      if 'capture_manager' in locals():
+            #          s3_path = capture_manager.capture_and_upload_image("manual_capture")
+            #          logger.info(f"手動捕獲影像，S3 Path: {s3_path}")
+            #      else:
+            #          logger.warning("Capture manager 未初始化，無法執行手動捕獲。")
             # # ... 其他命令 ...
             # else:
-            #    logger.warning(f"未知命令類型: {command_type}")
+                # logger.warning(f"未知命令類型: {command_type}")
         except json.JSONDecodeError:
             logger.error("無法解析收到的命令 Payload (非 JSON 格式)。")
         except Exception as e:
             logger.error(f"處理雲端命令時發生錯誤: {e}", exc_info=True)
 
+    iot_client = AWSIoTClient(iot_settings, command_callback=handle_cloud_command)
+    if not iot_client.is_connected():
+        logger.error("無法連接到 AWS IoT Core。應用程式終止。")
+        # 在退出前嘗試清理資源
+        s3_uploader.stop()
+        s3_uploader.join()
+        return
 
-    iot_client = AWSIoTClient(settings['aws']['iot'], command_callback=handle_cloud_command)
 
     # 模型管理器和推論器
-    model_manager = ModelManager(settings['models'])
+    model_settings = settings.get('models', {})
+    model_manager = ModelManager(model_settings)
+    # 載入物件偵測模型 (這是大多數偵測器需要的基本模型)
     object_detection_model = model_manager.get_model("object_detection")
     if object_detection_model is None:
         logger.error("無法載入物件偵測模型，應用程式終止。")
@@ -123,14 +152,15 @@ def main():
 
     object_detector_inferencer = ObjectDetector(
         model=object_detection_model,
-        class_mapping=settings['models']['object_detection'].get('class_mapping', {})
+        class_mapping=model_settings.get('object_detection', {}).get('class_mapping', {}) # 提供預設值
     )
     # 可擴展載入和初始化其他推論器（如果需要）
     # classification_model = model_manager.get_model("classification")
     # classification_inferencer = Classifier(classification_model)
 
     # 事件管理器和發布器
-    event_manager = EventManager(settings['events'])
+    event_settings = settings.get('events', {})
+    event_manager = EventManager(event_settings)
     event_publisher = EventPublisher(iot_client, settings['aws']['iot']['thing_name'])
 
     # 捕獲管理器
@@ -166,10 +196,10 @@ def main():
     # TODO: 初始化其他偵測器 (animal, safety, etc.)
 
     # 3. 初始化攝影機
-    camera_settings = settings['camera']
-    camera_source = camera_settings['source']
-    camera_width = camera_settings['width']
-    camera_height = camera_settings['height']
+    camera_settings = settings.get('camera', {}) # 使用 .get() 提供預設值
+    camera_source = camera_settings.get('source', 0) # 提供預設值
+    camera_width = camera_settings.get('width', 1280)
+    camera_height = camera_settings.get('height', 720)
     camera_codec = camera_settings.get('codec', 'MJPG') # 預設使用 MJPG
 
     # 使用 OpenCV 打開攝影機
@@ -180,8 +210,8 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
     # 嘗試設定編碼格式以提高讀取效率
-    fourcc = cv2.VideoWriter_fourcc(*camera_codec)
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+    fourcc_code = cv2.VideoWriter_fourcc(*camera_codec)
+    cap.set(cv2.CAP_PROP_FOURCC, fourcc_code)
     # 設置幀率 (如果需要)
     # cap.set(cv2.CAP_PROP_FPS, 30)
 
@@ -200,12 +230,20 @@ def main():
     processing_frame_count = 0
     start_time = time.time()
 
+    # 確保本地顯示設定存在
+    display_settings = settings.get('display', {})
+    display_enabled = display_settings.get('enabled', False)
+    display_width = display_settings.get('max_width', 800)
+    display_height = display_settings.get('max_height', 600)
+
+
     while not stop_requested.is_set():
         ret, frame_np = cap.read()
         if not ret:
             logger.warning("無法從攝影機讀取幀。")
-            # 這裡可以添加處理攝影機離線的邏輯
-            time.sleep(0.1) # 短暫等待後重試
+            # 這裡可以添加處理攝影機離線的邏輯，例如等待一段時間後重試
+            if not stop_requested.is_set(): # 只有在未請求停止時才等待
+                time.sleep(0.1)
             continue
 
         processing_frame_count += 1
@@ -215,14 +253,18 @@ def main():
         capture_manager.update_frame(frame_np)
 
         # 將 NumPy 影像轉換為 CUDA 影像
+        frame_cuda = None # 初始化為 None
         try:
-             frame_cuda = numpy_to_cuda(frame_np)
+             # 注意：jetson_utils.cudaFromNumpy 期望輸入是 HWC, RGB
+             # OpenCV 的 cap.read() 返回的是 HWC, BGR
+             # 所以需要先進行顏色空間轉換，這一步可能比較耗時
+             rgb_frame_np = cv2.cvtColor(frame_np, cv2.COLOR_BGR2RGB)
+             frame_cuda = jetson_utils.cudaFromNumpy(rgb_frame_np)
         except Exception as e:
              logger.error(f"NumPy 到 CUDA 轉換失敗: {e}", exc_info=True)
              continue # 跳過當前幀
 
         # 執行邊緣模型推論 (例如：物件偵測)
-        # 將原始幀和推論結果傳遞給所有啟用的偵測器
         detections_raw = []
         try:
             if object_detector_inferencer: # 確保推論器已初始化
@@ -241,9 +283,9 @@ def main():
 
 
         # 可選：在本地顯示處理後的影像 (用於調試)
-        if settings.get('display', {}).get('enabled', False):
-            # 在 NumPy 影像上繪製偵測結果 (需要先將 CUDA 轉回 NumPy，或者在 CUDA 表面直接繪製)
-            # 注意：這裡為了簡化，先在原始 frame_np 上繪製。如果需要在 CUDA 圖像上繪製並顯示，
+        if display_enabled:
+            # 在 NumPy 影像上繪製偵測結果
+            # 注意：這裡為了簡化，在原始 frame_np 上繪製。如果需要在 CUDA 圖像上繪製並顯示，
             # 且顯示模塊接受 CUDA 輸入，則需要不同的邏輯。
             # OpenCV 繪圖較慢，可能影響整體幀率
             frame_with_detections = draw_detections(
@@ -253,8 +295,6 @@ def main():
             )
             # 如果需要繪製 ROI 等，可以在這裡調用 image_utils.draw_roi 等方法
 
-            display_width = settings['display'].get('max_width', 800)
-            display_height = settings['display'].get('max_height', 600)
             display_frame = resize_for_display(frame_with_detections, display_width, display_height)
             cv2.imshow("Edge Detection", display_frame)
 
@@ -265,8 +305,12 @@ def main():
             # 可添加其他按鍵功能，例如手動觸發拍照並上傳
             # elif key == ord('s'):
             #     logger.info("手動觸發拍照上傳...")
-            #     s3_path = capture_manager.capture_and_upload_image("manual_trigger")
-            #     logger.info(f"手動拍照 S3 路徑: {s3_path}")
+            #     # 確保 capture_manager 變數在作用域內
+            #     if 'capture_manager' in locals():
+            #         s3_path = capture_manager.capture_and_upload_image("manual_trigger")
+            #         logger.info(f"手動拍照 S3 路徑: {s3_path}")
+            #     else:
+            #         logger.warning("Capture manager 未初始化，無法執行手動捕獲。")
 
 
         # 控制迴圈速度 (如果需要)
@@ -281,7 +325,7 @@ def main():
         logger.info("攝影機已釋放。")
 
     # 關閉顯示視窗
-    if settings.get('display', {}).get('enabled', False):
+    if display_enabled:
         cv2.destroyAllWindows()
         logger.info("顯示視窗已關閉。")
 
@@ -296,7 +340,7 @@ def main():
     logger.info("AWS IoT 連接已斷開。")
 
     # 卸載模型
-    model_manager.unload_all_models() # 雖然 jetson.inference 可能無實際卸載，但清空內部狀態是個好習慣
+    model_manager.unload_all_models() # 雖然 jetson_inference 可能無實際卸載，但清空內部狀態是個好習慣
 
     logger.info("所有資源已清理，應用程式終止。")
 
