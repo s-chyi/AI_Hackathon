@@ -41,7 +41,7 @@ class FaceDetector:
         Args:
             frame_cuda (jetson_utils.cudaImage): CUDA 影像數據。
         Returns:
-            List[jetson.inference.Detection]: 人臉偵測結果列表。
+            List: 人臉偵測結果列表。
         """
         if frame_cuda is None:
             logger.warning("輸入的 CUDA 影像為 None，無法執行人臉偵測。")

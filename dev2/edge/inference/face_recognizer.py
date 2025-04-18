@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # 定義一個結構來存儲帶有元數據的幀
 class FrameData:
     def __init__(self, frame_np: np.ndarray, frame_cuda: jetson.utils.cudaImage,
-                 timestamp: float, detections_raw: List[jetson.inference.Detection]):
+                 timestamp: float, detections_raw: List):
         self.frame_np = frame_np # NumPy 格式的原始幀 (用於裁剪等 OpenCV 操作)
         self.frame_cuda = frame_cuda # CUDA 格式的原始幀 (用於 jetson-inference 推論)
         self.timestamp = timestamp
@@ -86,7 +86,7 @@ class FaceRecognizer:
         logger.debug(f"開始在 {len(frame_buffer)} 幀緩衝區中尋找最佳人臉進行識別...")
 
         best_frame_data: Optional[FrameData] = None
-        best_face_detection: Optional[jetson.inference.Detection] = None
+        best_face_detection = None
         best_face_sharpness: float = -1.0 # 用於記錄最佳人臉的清晰度
 
         # --------------------------------------------------------------------
