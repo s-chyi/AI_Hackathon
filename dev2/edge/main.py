@@ -8,7 +8,7 @@ import time
 import threading
 import queue
 import yaml
-import josn
+import json
 import logging
 import signal # 用於處理停止信號
 
