@@ -3,3 +3,4 @@ dev/edge/certs/*
 *.log
 .env
 settings.yaml
+test*

@@ -43,12 +43,43 @@ logger = logging.getLogger(__name__)
 # 全域停止標誌，用於安全退出主循環
 stop_requested = threading.Event()
 
+# 全域共享變數：儲存最新的雲端識別結果
+# 使用鎖保護，因為可能被不同執行緒訪問
+latest_recognition_result = {"person_id": "no_person", "timestamp": 0} # 初始化為無人狀態
+recognition_result_lock = threading.Lock()
+
 def signal_handler(signum, frame):
     """
     處理終止信號 (如 Ctrl+C)。
     """
     logger.info(f"收到信號 {signum}，請求停止應用程式。")
     stop_requested.set()
+
+# 新增：處理雲端識別結果的回調函數
+def handle_recognition_result(topic, payload_str):
+    logger.info(f"收到雲端識別結果 Topic: {topic}, Payload: {payload_str}")
+    try:
+        result_data = json.loads(payload_str)
+        person_id = result_data.get("person_id", "no_person") # 如果 Payload 中沒有 person_id，設為 no_person
+        original_timestamp = result_data.get("original_timestamp", 0) # 邊緣發布事件時的時間戳
+
+        logger.info(f"解析識別結果: Person ID: {person_id}, Original Timestamp: {original_timestamp}")
+
+        # 更新全局共享的最新識別結果狀態
+        with recognition_result_lock:
+            latest_recognition_result["person_id"] = person_id
+            latest_recognition_result["timestamp"] = time.time() # 記錄收到結果的時間
+            latest_recognition_result["original_event_timestamp"] = original_timestamp # 記錄邊緣事件的時間戳
+            # 可以儲存更多結果信息，如 confidence, summary 等
+            latest_recognition_result["match_confidence"] = result_data.get("match_confidence")
+            latest_recognition_result["summary"] = result_data.get("summary")
+
+        logger.info(f"已更新最新識別結果狀態：{latest_recognition_result}")
+
+    except json.JSONDecodeError:
+        logger.error("無法解析收到的識別結果 Payload (非 JSON 格式)。")
+    except Exception as e:
+        logger.error(f"處理雲端識別結果時發生錯誤: {e}", exc_info=True)
 
 def main():
     logger.info("應用程式啟動...")
@@ -90,8 +121,8 @@ def main():
 
     # AWS IoT 客戶端
     iot_settings = settings['aws'].get('iot', {})
-    if not all(iot_settings.get(k) for k in ['endpoint', 'thing_name', 'cert_path', 'pri_key_path', 'root_ca_path']):
-         logger.error("AWS IoT 設定不完整。應用程式終止。")
+    if not all(iot_settings.get(k) for k in ['endpoint', 'thing_name', 'cert_path', 'pri_key_path', 'root_ca_path', 'result_topic']):
+         logger.error("AWS IoT 設定不完整 (缺少 endpoint, thing_name, 證書路徑或 result_topic)。應用程式終止。")
          s3_uploader.stop()
          s3_uploader.join()
          return
@@ -117,7 +148,7 @@ def main():
              logger.error(f"處理雲端命令時發生錯誤: {e}", exc_info=True)
 
 
-    iot_client = AWSIoTClient(iot_settings, command_callback=handle_cloud_command)
+    iot_client = AWSIoTClient(iot_settings, command_callback=handle_cloud_command, result_callback=handle_recognition_result)
     if not iot_client.is_connected():
          logger.error("無法連接到 AWS IoT Core。應用程式終止。")
          s3_uploader.stop()

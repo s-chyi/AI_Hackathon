@@ -1,96 +1,157 @@
 # detectors/cargo_detector.py
 
 import logging
-from typing import List
+import time
+from typing import List, Dict, Optional, Any
+# 仍然需要 jetson_inference 獲取 Detection 類型
 import jetson.inference
-from events.event_types import EventType
+import jetson.utils # 需要 cudaImage 類型
+import threading # 引入 threading
+
+from events.event_types import EventType # 引入事件類型 (如果 CargoDetector 需要觸發事件)
+from events.event_manager import EventManager # 引入 EventManager (如果 CargoDetector 需要觸發事件)
+from events.event_publisher import EventPublisher # 引入 EventPublisher (如果 CargoDetector 需要發布事件)
+from data_capture.capture_manager import CaptureManager, FrameData # 引入 CaptureManager 和 FrameData (如果 CargoDetector 需要捕獲影像)
+
 from .base_detector import BaseDetector
+
+from inference.inferencer import ObjectDetector # 引入 ObjectDetector 推論器類型
 
 logger = logging.getLogger(__name__)
 
 class CargoDetector(BaseDetector):
     """
-    專注於偵測貨物和與貨物相關的事件。
+    專注於偵測貨物和與貨物相關的事件，根據人員識別結果調整行為。
     """
-    def __init__(self, settings: dict, *args, **kwargs):
+    def __init__(self, settings: dict,
+                 object_detector: ObjectDetector, # 主要物件偵測器 (偵測貨物和人)
+                 event_manager: EventManager, # 如果需要觸發貨物事件
+                 event_publisher: EventPublisher, # 如果需要發布貨物事件
+                 capture_manager: CaptureManager, # 如果需要捕獲貨物事件影像
+                 recognition_result_state: Dict[str, Any], # <-- 共享的最新識別結果狀態
+                 recognition_result_lock: threading.Lock): # <-- 保護狀態的鎖
         """
         初始化貨物偵測器。
         Args:
             settings (dict): 此偵測器的特定設定 (config.detectors.cargo)。
-            *args, **kwargs: 傳遞給 BaseDetector 的其他參數。
+            object_detector (ObjectDetector): 主要物件偵測推論器實例。
+            event_manager (EventManager): 事件管理器實例 (如果需要觸發貨物事件)。
+            event_publisher (EventPublisher): 事件發布器實例 (如果需要發布貨物事件)。
+            capture_manager (CaptureManager): 捕獲管理器實例 (如果需要捕獲貨物事件影像)。
+            recognition_result_state (Dict[str, Any]): 共享的最新雲端識別結果字典。
+            recognition_result_lock (threading.Lock): 保護識別結果狀態的鎖。
         """
-        super().__init__(settings, *args, **kwargs)
+        # 這裡將所有依賴都傳給基類，即使 CargoDetector 可能只用到其中一部分
+        # 在基類中，可以根據是否傳入相應實例來判斷功能是否可用
+        super().__init__(settings, object_detector, event_manager, event_publisher, capture_manager)
+
         self.cargo_class_name = self.settings.get('class_name', 'cargo')
-        self.cooldown_seconds = self.settings.get('cooldown_seconds', 30)
+        self.cooldown_seconds = self.settings.get('cooldown_seconds', 30) # 貨物事件冷卻時間
 
-        # 可以在這裡初始化更複雜的狀態或模型（例如用於判斷傾斜的分類模型）
-        # self.tilt_classifier = kwargs.get('tilt_classifier') # 假設可以傳入分類推論器
+        self.recognition_result_state = recognition_result_state # 儲存對共享狀態的引用
+        self.recognition_result_lock = recognition_result_lock # 儲存鎖的引用
 
-    def process(self, frame_cuda: jetson.utils.cudaImage, detections_raw: List):
+        logger.info("CargoDetector 初始化成功。")
+
+    def process(self, frame_cuda: jetson.utils.cudaImage, detections_raw: List[Any]): # List[jetson_inference.Detection]
         """
         處理貨物偵測邏輯。
         Args:
             frame_cuda (jetson.utils.cudaImage): 當前幀的 CUDA 影像數據。
-            detections_raw (List): 物件偵測模型輸出的原始偵測結果列表。
+            detections_raw (List[Any]): 物件偵測模型輸出的原始偵測結果列表 (預期類型為 List[jetson_inference.Detection])。
         """
         if not self.is_enabled:
             return
 
+        # 篩選出貨物偵測結果
         cargo_detections = [
             det for det in detections_raw
-            if self.object_detector.class_mapping.get(det.ClassID) == self.cargo_class_name
+            if isinstance(det, jetson.inference.Detection) and self.object_detector.class_mapping.get(det.ClassID) == self.cargo_class_name
         ]
 
         # --------------------------------------------------------------------
-        # 實現具體的貨物偵測規則和事件觸發邏輯
+        # 獲取最新的雲端識別結果
+        # --------------------------------------------------------------------
+        latest_person_id = "no_person"
+        latest_result_timestamp = 0 # 收到結果的時間
+        latest_original_event_timestamp = 0 # 觸發該結果的邊緣事件時間
+        latest_match_confidence = None
+
+        with self.recognition_result_lock:
+            latest_person_id = self.recognition_result_state.get("person_id", "no_person")
+            latest_result_timestamp = self.recognition_result_state.get("timestamp", 0)
+            latest_original_event_timestamp = self.recognition_result_state.get("original_event_timestamp", 0)
+            latest_match_confidence = self.recognition_result_state.get("match_confidence")
+
+
+        # logger.debug(f"CargoDetector 獲取最新識別結果: {latest_person_id} (收到時間: {latest_result_timestamp})")
+
+
+        # --------------------------------------------------------------------
+        # 根據最新的識別結果，處理貨物偵測邏輯
         # --------------------------------------------------------------------
 
-        # 規則範例 1: 簡單地偵測到貨物出現
-        # (這個事件可能太頻繁，通常需要更具體的規則)
-        # if len(cargo_detections) > 0:
-        #     metadata = {"count": len(cargo_detections)}
-        #     self._trigger_event(
-        #         EventType.CARGO_DETECTED.value,
-        #         metadata=metadata,
-        #         cooldown_override=self.cooldown_seconds
-        #     )
-
-        # 規則範例 2: 偵測到貨物傾斜 (需要一個能判斷傾斜的模型或方法)
-        # 這裡假設您有另一種方法可以從 detection 判斷傾斜
-        # for cargo_det in cargo_detections:
-        #     if self._is_cargo_tilted(cargo_det): # 假設有一個內部方法 _is_cargo_tilted
-        #         metadata = {"bbox": [cargo_det.Left, cargo_det.Top, cargo_det.Right, cargo_det.Bottom]}
-        #         self._trigger_event(
-        #              EventType.CARGO_TILTED.value,
-        #              metadata=metadata,
-        #              cooldown_override=self.cooldown_seconds # 或使用更短/更長的冷卻
-        #         )
-        #         # 如果只想觸發一次，可以 break
-
-        # 規則範例 3: 偵測到 QR Code (QR Code 讀取通常是獨立於貨物偵測的模塊，但可以放在這裡協調)
-        # 假設您有另一個模塊負責讀取 QR Code，並在讀取成功時通知這裡或直接發布事件。
-        # 這裡只是一個邏輯上的表示
-        # if qr_code_successfully_scanned_in_this_frame: # 從其他地方獲取狀態
-        #      qr_code_data = get_qr_code_data() # 從其他地方獲取數據
-        #      metadata = {"qr_data": qr_code_data}
-        #      self._trigger_event(EventType.QR_CODE_SCANNED.value, metadata=metadata)
+        # 判斷是否要處理貨物事件
+        # 例如：只在識別到已知員工時才監控貨物狀態異常
+        process_cargo_events = False
+        if latest_person_id != "no_person" and latest_person_id != "unknown" and not latest_person_id.startswith("error_"):
+            # 如果識別到已知員工
+            # 您可能需要檢查收到結果的時間與當前時間的間隔，確保結果是「新鮮」的
+            # 例如，如果結果是 30 秒前收到的，可能就過期了
+            # 或者檢查邊緣事件時間戳與當前時間的間隔
+            if (time.time() - latest_result_timestamp) < 30: # 假設結果 30 秒內有效
+                process_cargo_events = True
+                logger.debug(f"識別到已知人物 '{latest_person_id}'，啟用貨物事件處理。")
+            else:
+                logger.debug("識別結果已過期，跳過貨物事件處理。")
+        elif latest_person_id == "unknown":
+            # 如果偵測到未知人物，是否要特別監控貨物？
+            # 根據需求調整
+            # process_cargo_events = True # 例如，對未知人物加強監控
+            logger.debug("偵測到未知人物，貨物事件處理未啟用。")
+        else:
+            logger.debug("未偵測到人物或識別失敗，貨物事件處理未啟用。")
 
 
-    # 輔助方法範例：判斷貨物是否傾斜
-    # def _is_cargo_tilted(self, detection: jetson.inference.Detection) -> bool:
-    #      """
-    #      根據偵測到的貨物 bounding box 或使用分類模型判斷是否傾斜。
-    #      這是一個簡化或需要進一步實現的邏輯。
-    #      """
-    #      # 簡單範例：根據 bounding box 的長寬比或角度估計 (不太準確)
-    #      # width = detection.Right - detection.Left
-    #      # height = detection.Bottom - detection.Top
-    #      # return width / height > 1.5 or height / width > 1.5 # 非常簡陋的判斷
+        # 如果決定處理貨物事件
+        if process_cargo_events and len(cargo_detections) > 0:
+            pass
+            # 實現具體的貨物偵測規則和事件觸發邏輯
+            # 只有在有人物且人物符合特定條件時，才檢查貨物是否異常
+            # 例如：
+            # 規則範例 1: 偵測到貨物傾斜 (需要更複雜的邊緣模型或邏輯)
+            # if self.settings.get('alert_on_tilt', False):
+            #      for cargo_det in cargo_detections:
+            #           if self._is_cargo_tilted(cargo_det): # 假設有判斷傾斜的方法
+            #                event_type_cargo = EventType.CARGO_TILTED.value
+            #                # 觸發事件，構建 metadata (包含貨物框，以及當前相關的人物 ID)
+            #                metadata_cargo = {
+            #                     "cargo_bbox": [int(cargo_det.Left), int(cargo_det.Top), int(cargo_det.Right), int(cargo_det.Bottom)],
+            #                     "responsible_person_id": latest_person_id, # 附加當前最近的識別到的人物 ID
+            #                     "person_match_confidence": latest_match_confidence # 附加信心度
+            #                }
+            #                # 檢查貨物事件冷卻時間
+            #                if self.event_manager.should_trigger_event(event_type_cargo, cooldown_override=self.cooldown_seconds):
+            #                     logger.info(f"事件 '{event_type_cargo}' 觸發 (與人物 {latest_person_id} 相關)。")
+            #                     # 獲取當前幀用於捕獲
+            #                     frame_buffer = self.capture_manager.get_frame_buffer()
+            #                     current_frame_data = frame_buffer[-1] if frame_buffer else None
+            #                     if current_frame_data:
+            #                          s3_image_path = self.capture_manager.capture_and_upload_image(event_type_cargo, current_frame_data, metadata_cargo)
+            #                          if s3_image_path:
+            #                              self.event_publisher.publish_event(event_type_cargo, s3_image_path=s3_image_path, metadata=metadata_cargo)
+            #                              self.event_manager.record_event_triggered(event_type_cargo)
+            #                          else:
+            #                              logger.warning(f"未能捕獲影像用於貨物傾斜事件 '{event_type_cargo}'。")
+            #                     else:
+            #                          logger.error("捕獲管理器緩衝區為空，無法捕獲影像用於貨物傾斜事件。")
+            #                    break # 只觸發一次傾斜事件
 
-    #      # 更複雜的範例：使用分類模型
-    #      # 如果有 tilt_classifier:
-    #      #     cargo_image_cuda = crop_cuda_image(frame_cuda, detection.BoundingBox) # 需要實現 CUDA 裁剪
-    #      #     tilt_prediction = self.tilt_classifier.infer(cargo_image_cuda)
-    #      #     return tilt_prediction == "tilted" # 根據分類結果判斷
+            # 規則範例 2: 偵測到貨物在移動區域 (需要區域設定)
+            # if self.settings.get('alert_on_movement_in_area', False):
+            #      # ... 實現邏輯 ...
+            #      pass
 
-    #      return False # 預設不判斷傾斜
+        # else:
+        #      # 如果不處理貨物事件，則跳過所有貨物相關的偵測和觸發
+        #      pass
