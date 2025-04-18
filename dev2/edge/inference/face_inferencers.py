@@ -35,7 +35,7 @@ class FaceDetector:
         logger.info("FaceDetector 初始化成功。")
 
 
-    def detect_faces(self, frame_cuda: jetson_utils.cudaImage) -> List[jetson.inference.Detection]:
+    def detect_faces(self, frame_cuda: jetson.utils.cudaImage) -> List:
         """
         在給定的 CUDA 影像上執行人臉偵測。
         Args:
@@ -74,7 +74,7 @@ class FaceEmbedder:
         logger.info("FaceEmbedder 初始化成功。")
 
     # Jetson-inference 的 poseNet.Process 方法通常需要 CUDA 影像作為輸入
-    def get_embedding(self, face_cuda_image: jetson_utils.cudaImage) -> Optional[np.ndarray]:
+    def get_embedding(self, face_cuda_image: jetson.utils.cudaImage) -> Optional[np.ndarray]:
         """
         從裁剪好的人臉 CUDA 影像中提取特徵向量。
         Args:
