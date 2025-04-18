@@ -39,7 +39,7 @@ class ObjectDetector(BaseInferencer):
     """
     物件偵測模型推論器。
     """
-    def infer(self, frame_cuda: jetson.utils.cudaImage) -> List[jetson.inference.Detection]:
+    def infer(self, frame_cuda: jetson.utils.cudaImage) -> List:
         """
         執行物件偵測推論。
         Args:
