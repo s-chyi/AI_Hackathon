@@ -2,7 +2,7 @@
 
 from awsiot import mqtt_connection_builder
 # 引入 QoS 枚舉和 CRT 錯誤類型
-from awsiot.mqtt import QoS
+from awscrt.mqtt import QoS
 import awscrt.exceptions
 
 import json
