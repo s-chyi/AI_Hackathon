@@ -1,3 +1,5 @@
 dev/edge/certificates/
+dev/edge/certs/*
 *.log
 .env
+settings.yaml

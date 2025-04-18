@@ -1,0 +1,8 @@
+# Python Dependencies
+opencv-python             # OpenCV for camera and image processing
+numpy                     # Numerical operations
+PyYAML                    # For loading configuration from YAML file
+boto3                     # AWS SDK for Python (for S3 upload)
+aws-iot-device-sdk-python-v2 # AWS IoT Device SDK for Python (for IoT Core communication)
+# jetson.inference and jetson.utils are part of JetPack, assumed pre-installed
+# python-dotenv is in your sample, will replace with PyYAML config
