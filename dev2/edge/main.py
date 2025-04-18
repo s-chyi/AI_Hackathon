@@ -1,39 +1,40 @@
 # main.py
 
 import cv2
-import jetson_utils
-import jetson_inference
-
+import jetson.utils
+import jetson.inference
 import numpy as np
 import time
 import threading
 import queue
 import yaml
 import logging
-import signal # 用於處理停止信號
-import json   # 引入 json 用於解析命令 payload
+import signal
+import json # 引入 json
 
 # 引入我們自己設計的模組
-from utils.cuda_utils import numpy_to_cuda #, cuda_to_numpy # 如果需要轉回 numpy
-from utils.image_utils import resize_for_display, draw_detections #, draw_roi
+from utils.cuda_utils import numpy_to_cuda
+from utils.image_utils import resize_for_display, draw_detections
 from utils.s3_uploader import S3Uploader
 from iot_client.aws_iot_client import AWSIoTClient
 from inference.model_manager import ModelManager
 from inference.inferencer import ObjectDetector # 引入具體的推論器
+# 移除人臉相關模組導入
+# from inference.face_models import FACE_DETECTION_MODEL, FACE_EMBEDDING_MODEL
+# from inference.face_inferencers import FaceDetector as FaceDetectorInferencer
+# from inference.face_db import KnownFacesDB
+# from inference.face_recognizer import FaceRecognizer
+
 from events.event_types import EventType # 引入事件類型
 from events.event_manager import EventManager
 from events.event_publisher import EventPublisher
-from data_capture.capture_manager import CaptureManager
+# 引入 CaptureManager 和 FrameData
+from data_capture.capture_manager import CaptureManager, FrameData
+
 # 引入具體的偵測器
 from detectors.person_detector import PersonDetector
-from detectors.cargo_detector import CargoDetector
-# 根據需要在 settings.yaml 中啟用或禁用其他偵測器，並在這裡引入和初始化
+from detectors.cargo_detector import CargoDetector # 引入 CargoDetector
 
-# 引入人臉識別相關的模組
-from inference.face_models import FACE_DETECTION_MODEL, FACE_EMBEDDING_MODEL
-from inference.face_inferencers import FaceDetector, FaceEmbedder # 引入具體的人臉推論器
-from inference.face_db import KnownFacesDB
-from inference.face_recognizer import FaceRecognizer # 引入人臉識別器
 
 # 配置 logging (這部分可以在載入設定之前完成基礎配置)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s')
@@ -63,14 +64,15 @@ def main():
         return
 
     if settings.get('debug', False):
-         logging.getLogger().setLevel(logging.DEBUG)
-         logger.debug("已啟用 DEBUG 級別日誌。")
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("已啟用 DEBUG 級別日誌。")
 
-    # 驗證關鍵設定是否存在
-    if not all(k in settings for k in ['aws', 'camera', 'models', 'known_faces_db', 'capture']):
-         logger.error("設定檔案中缺少必要的頂層區塊 (aws, camera, models, known_faces_db, capture)。應用程式終止。")
-         return
-    # 這裡可以添加更多對 settings 內容的檢查
+    # 驗證關鍵設定是否存在 (現在只需要 aws, camera, models, capture)
+    # 檢查 models 中至少有 object_detection 設定
+    if not all(k in settings for k in ['aws', 'camera', 'models', 'capture']) or \
+       'object_detection' not in settings.get('models', {}):
+        logger.error("設定檔案中缺少必要的區塊或 'models.object_detection' 設定。應用程式終止。")
+        return
 
 
     # 註冊信號處理器
@@ -94,24 +96,20 @@ def main():
          s3_uploader.join()
          return
 
-    # 引入 known_faces_db 變數到 handle_cloud_command 函數的作用域，以便可以調用其方法
-    known_faces_db = None # 先初始化為 None
-
     def handle_cloud_command(topic, payload):
         logger.info(f"收到雲端命令 Topic: {topic}, Payload: {payload}")
         try:
              command_data = json.loads(payload)
              command_type = command_data.get("type")
              logger.info(f"處理命令: {command_type}")
-             if command_type == "update_known_faces_db":
-                 logger.info("收到更新已知人臉數據庫命令...")
-                 # 調用 known_faces_db 實例的重新載入方法
-                 if known_faces_db: # 確保 known_faces_db 已成功初始化
-                      known_faces_db.reload_embeddings_from_s3()
-                 else:
-                      logger.warning("KnownFacesDB 未初始化，無法執行更新命令。")
-             # ... 處理其他命令邏輯 ...
-             # elif command_type == "set_threshold":
+             # 移除 update_known_faces_db 命令處理邏輯
+             # if command_type == "update_known_faces_db":
+             #     ...
+             # ... 處理其他命令邏輯 (例如：重啟程式、修改物件偵測閾值等) ...
+             if command_type == "restart_app":
+                 logger.info("收到重啟應用程式命令。")
+                 # 這裡可以設置一個標誌或使用 os.execv 重新啟動
+                 stop_requested.set() # 設置停止標誌，讓主循環結束，然後外部腳本可以重啟
              # ...
         except json.JSONDecodeError:
              logger.error("無法解析收到的命令 Payload (非 JSON 格式)。")
@@ -126,12 +124,11 @@ def main():
          s3_uploader.join()
          return
 
-
-    # 模型管理器和推論器
+    # 模型管理器和推論器 (現在只用於物件偵測)
     model_settings = settings.get('models', {})
     model_manager = ModelManager(model_settings)
 
-    # ... 載入 object_detection, face_detection, face_embedding 模型的邏輯 (保持不變) ...
+    # 載入物件偵測模型 (必需)
     object_detection_model = model_manager.get_model("object_detection")
     if object_detection_model is None:
         logger.error("無法載入物件偵測模型，應用程式終止。")
@@ -143,32 +140,6 @@ def main():
         model=object_detection_model,
         class_mapping=model_settings.get('object_detection', {}).get('class_mapping', {})
     )
-
-    face_detection_model = model_manager.get_model(FACE_DETECTION_MODEL)
-    face_detector_inferencer = None
-    if face_detection_model:
-         face_detector_inferencer = FaceDetector(model=face_detection_model)
-
-    face_embedding_model = model_manager.get_model(FACE_EMBEDDING_MODEL)
-    face_embedder_inferencer = None
-    if face_embedding_model:
-         face_embedder_inferencer = FaceEmbedder(model=face_embedding_model)
-
-
-    # 新增：已知人臉數據庫 (現在需要 AWS 設定)
-    known_faces_db_settings = settings.get('known_faces_db', {})
-    known_faces_db = KnownFacesDB(known_faces_db_settings, settings['aws']) # <-- 傳入 settings 和 aws 設定
-    # KnownFacesDB 在初始化時會自動嘗試從 S3 載入
-
-
-    # 人臉識別器 (只有當所有依賴模型和數據庫都成功初始化時才初始化)
-    face_recognizer = None
-    if face_detector_inferencer and face_embedder_inferencer and known_faces_db.get_all_embeddings(): # 檢查數據庫是否有內容
-         face_recognizer = FaceRecognizer(settings, face_detector_inferencer, face_embedder_inferencer, known_faces_db)
-         logger.info("人臉識別器初始化成功。")
-    else:
-         logger.warning("人臉識別器初始化失敗或數據庫為空。人員偵測器將不執行人臉識別。")
-
 
     # 事件管理器和發布器
     event_settings = settings.get('events', {})
@@ -184,67 +155,62 @@ def main():
     detectors = []
     detector_settings = settings.get('detectors', {})
 
-    # PersonDetector 的初始化現在需要 FaceRecognizer 實例
+    # 修改：PersonDetector 的初始化參數
     if detector_settings.get('person', {}).get('enabled', False):
         logger.info("初始化人員偵測器...")
-        # 只有當 FaceRecognizer 成功初始化時，才初始化 PersonDetector
-        if face_recognizer:
+        if object_detector_inferencer:
              person_detector = PersonDetector(
                  settings=detector_settings['person'],
                  object_detector=object_detector_inferencer,
-                 face_recognizer=face_recognizer, # 傳入 FaceRecognizer 實例
                  event_manager=event_manager,
                  event_publisher=event_publisher,
-                 capture_manager=capture_manager # 傳入 CaptureManager 實例
+                 capture_manager=capture_manager
              )
              detectors.append(person_detector)
         else:
-             logger.warning("人臉識別器初始化失敗或數據庫為空，無法初始化 PersonDetector。")
+             logger.warning("物件偵測器未成功初始化，無法初始化 PersonDetector。")
 
 
     if detector_settings.get('cargo', {}).get('enabled', False):
         logger.info("初始化貨物偵測器...")
-        cargo_detector = CargoDetector(
-            settings=detector_settings['cargo'],
-            object_detector=object_detector_inferencer, # 貨物偵測器需要物件偵測結果
-            event_manager=event_manager,
-            event_publisher=event_publisher,
-            capture_manager=capture_manager
-            # 可傳入其他推論器實例，如 tilt_classifier=classification_inferencer
-        )
-        detectors.append(cargo_detector)
+        # CargoDetector 不變
+        if object_detector_inferencer: # CargoDetector 也依賴 object_detector
+            cargo_detector = CargoDetector(
+                settings=detector_settings['cargo'],
+                object_detector=object_detector_inferencer,
+                event_manager=event_manager,
+                event_publisher=event_publisher,
+                capture_manager=capture_manager
+            )
+            detectors.append(cargo_detector)
+        else:
+             logger.warning("物件偵測器未成功初始化，無法初始化 CargoDetector。")
 
-    # TODO: 初始化其他偵測器 (animal, safety, etc.)
+    # TODO: 初始化其他偵測器
 
     # 3. 初始化攝影機
-    camera_settings = settings.get('camera', {}) # 使用 .get() 提供預設值
-    camera_source = camera_settings.get('source', 0) # 提供預設值
+    # ... 攝影機初始化邏輯 (保持不變) ...
+    camera_settings = settings.get('camera', {})
+    camera_source = camera_settings.get('source', 0)
     camera_width = camera_settings.get('width', 1280)
     camera_height = camera_settings.get('height', 720)
-    camera_codec = camera_settings.get('codec', 'MJPG') # 預設使用 MJPG
+    camera_codec = camera_settings.get('codec', 'MJPG')
 
-    # 使用 OpenCV 打開攝影機
-    # 根據攝影機型號和驅動，source 可以是 int (設備 ID), str (檔案路徑), 或串流 URL
     cap = cv2.VideoCapture(camera_source)
-
-    # 設定攝影機參數 (如果需要且攝影機支持)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
-    # 嘗試設定編碼格式以提高讀取效率
     fourcc_code = cv2.VideoWriter_fourcc(*camera_codec)
     cap.set(cv2.CAP_PROP_FOURCC, fourcc_code)
-    # 設置幀率 (如果需要)
-    # cap.set(cv2.CAP_PROP_FPS, 30)
 
     if not cap.isOpened():
-        logger.error(f"無法開啟攝影機設備 {camera_source}。請檢查設備 ID 或權限。應用程式終止。")
-        # 在退出前嘗試清理資源
+        logger.error(f"無法開啟攝影機設備 {camera_source}。應用程式終止。")
         iot_client.disconnect()
         s3_uploader.stop()
         s3_uploader.join()
         return
 
     logger.info(f"攝影機開啟成功，分辨率 {cap.get(cv2.CAP_PROP_FRAME_WIDTH)}x{cap.get(cv2.CAP_PROP_FRAME_HEIGHT)}，編碼 {camera_codec}。")
+
 
     # 4. 主處理迴圈
     logger.info("進入主處理迴圈...")
@@ -270,7 +236,7 @@ def main():
         frame_cuda = None
         try:
              rgb_frame_np = cv2.cvtColor(frame_np, cv2.COLOR_BGR2RGB)
-             frame_cuda = jetson_utils.cudaFromNumpy(rgb_frame_np)
+             frame_cuda = jetson.utils.cudaFromNumpy(rgb_frame_np)
         except Exception as e:
              logger.error(f"NumPy 到 CUDA 轉換失敗: {e}", exc_info=True)
              continue
@@ -285,18 +251,24 @@ def main():
             detections_raw = []
 
         # 將包含偵測結果的當前幀添加到捕獲管理器的緩衝區
+        # 注意：這裡緩衝的是最新一幀，PersonDetector 將直接使用當前幀的 detections_raw 判斷是否有人物
+        # 緩衝區主要用於如果未來需要回溯或捕獲延後幀，但目前只捕獲當前幀
         capture_manager.add_frame_to_buffer(frame_np, frame_cuda, detections_raw)
+
 
         # 將原始偵測結果和 CUDA 幀傳遞給所有偵測器進行處理
         for detector in detectors:
             try:
+                # detectors 現在會從 capture_manager 獲取 buffer，但 process 方法仍然接收當前幀的結果以便觸發判斷
                 detector.process(frame_cuda, detections_raw)
             except Exception as e:
                 logger.error(f"偵測器 '{detector.__class__.__name__}' 處理失敗: {e}", exc_info=True)
 
 
-        # 可選：在本地顯示處理後的影像 (用於調試)
+        # 可選：在本地顯示處理後的影像
+        # ... 顯示邏輯 (保持不變) ...
         if display_enabled:
+            # 如果需要顯示物件偵測框
             frame_with_detections = draw_detections(
                  frame_np.copy(),
                  detections_raw,
@@ -308,45 +280,29 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q') or key == 27:
                 stop_requested.set()
-            # 可添加其他按鍵功能，例如手動觸發拍照並上傳
-            # elif key == ord('s'):
-            #     logger.info("手動觸發拍照上傳...")
-            #     # 確保 capture_manager 變數在作用域內
-            #     if 'capture_manager' in locals():
-            #         s3_path = capture_manager.capture_and_upload_image("manual_trigger")
-            #         logger.info(f"手動拍照 S3 路徑: {s3_path}")
-            #     else:
-            #         logger.warning("Capture manager 未初始化，無法執行手動捕獲。")
 
-
-        # 控制迴圈速度 (如果需要)
-        # time.sleep(0.01) # 避免 CPU/GPU 佔用過高
 
     # 5. 清理資源
     logger.info("應用程式停止中，開始清理資源...")
+    # ... 清理邏輯 (保持不變) ...
 
-    # 停止攝影機
     if cap.isOpened():
         cap.release()
         logger.info("攝影機已釋放。")
 
-    # 關閉顯示視窗
     if display_enabled:
         cv2.destroyAllWindows()
         logger.info("顯示視窗已關閉。")
 
-    # 停止 S3 上傳執行緒並等待其完成佇列任務
     s3_uploader.stop()
-    s3_uploader.wait_for_completion() # 等待所有上傳完成
+    s3_uploader.wait_for_completion()
     s3_uploader.join()
     logger.info("S3 上傳執行緒已停止。")
 
-    # 斷開 AWS IoT 連接
     iot_client.disconnect()
     logger.info("AWS IoT 連接已斷開。")
 
-    # 卸載模型
-    model_manager.unload_all_models() # 雖然 jetson_inference 可能無實際卸載，但清空內部狀態是個好習慣
+    model_manager.unload_all_models()
 
     logger.info("所有資源已清理，應用程式終止。")
 

@@ -10,7 +10,8 @@ class EventType(Enum):
     UNKNOWN_PERSON_DETECTED = "UNKNOWN_PERSON_DETECTED" # 偵測到人員但無法識別
     KNOWN_PERSON_DETECTED = "KNOWN_PERSON_DETECTED"   # 偵測到已知人員，包含人物 ID
 
-    PERSON_DETECTED = "PERSON_DETECTED"           # 偵測到人員
+    PERSON_DETECTED = "PERSON_DETECTED" # 原始物件偵測到人物 (可能用於本地顯示或簡易計數)
+    PERSON_FOR_IDENTIFICATION = "PERSON_FOR_IDENTIFICATION" # <-- 新增事件，通知雲端進行人臉識別
     PERSON_IN_RESTRICTED_AREA = "PERSON_IN_RESTRICTED_AREA" # 人員進入限制區域 (需要區域設定)
     PERSON_FALL_DETECTED = "PERSON_FALL_DETECTED"     # 偵測到人員跌倒 (需要姿勢估計模型)
     PERSON_IDLE_TOO_LONG = "PERSON_IDLE_TOO_LONG"     # 人員長時間靜止 (需要時間跟蹤)

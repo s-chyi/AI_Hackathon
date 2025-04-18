@@ -13,10 +13,16 @@ import jetson.utils
 
 # 引入 S3 上傳器和 FrameData 結構
 from utils.s3_uploader import S3Uploader
-# 引入 FrameData 結構
-from inference.face_recognizer import FrameData # FrameData 定義在 face_recognizer 中
 
 logger = logging.getLogger(__name__)
+
+class FrameData:
+    def __init__(self, frame_np: np.ndarray, frame_cuda: jetson.utils.cudaImage,
+                 timestamp: float, detections_raw: List):
+        self.frame_np = frame_np # NumPy 格式的原始幀 (用於裁剪等 OpenCV 操作)
+        self.frame_cuda = frame_cuda # CUDA 格式的原始幀 (用於 jetson-inference 推論)
+        self.timestamp = timestamp
+        self.detections_raw = detections_raw # 這幀的物件偵測結果 (預期是 jetson_inference.Detection 列表)
 
 class CaptureManager:
     """
@@ -43,16 +49,6 @@ class CaptureManager:
 
         logger.info(f"CaptureManager 初始化成功，幀緩衝區大小: {self._buffer_size}")
 
-    def update_frame(self, frame: np.ndarray):
-        """
-        更新捕獲管理器中的當前影像。
-        應在主循環中處理完一幀後調用。
-        Args:
-            frame (np.ndarray): 當前的 OpenCV 影像幀。
-        """
-        self._current_frame = frame
-        self._frame_timestamp = time.time()
-
     def add_frame_to_buffer(self, frame_np: np.ndarray, frame_cuda: jetson.utils.cudaImage,
                            detections_raw: List):
         """
@@ -60,16 +56,16 @@ class CaptureManager:
         Args:
             frame_np (np.ndarray): OpenCV 格式的影像幀。
             frame_cuda (jetson.utils.cudaImage): CUDA 格式的影像幀。
-            detections_raw (List): 這幀的物件偵測結果。
+            detections_raw (List[jetson.inference.Detection]): 這幀的物件偵測結果。
         """
-        # 創建 FrameData 實例 (這裡複製影像以確保後續處理不影響原始幀)
+        # 創建 FrameData 實例
         # 注意：深度複製影像可能消耗較多記憶體，對於邊緣設備需要謹慎。
-        # 這裡為了示例簡單，直接存儲引用，如果需要確保安全性或不變性，需進行複製
+        # 這裡為了示例，複製 NumPy 幀
         new_frame_data = FrameData(
             frame_np=frame_np.copy(), # 複製 NumPy 幀
             frame_cuda=frame_cuda, # CUDA 幀通常是設備內存，不需要複製
             timestamp=time.time(),
-            detections_raw=detections_raw # 這裡的 detections_raw 已經是新的 List，通常無需深度複製
+            detections_raw=detections_raw # detections_raw 已經是新列表
         )
 
         with self._buffer_lock:
@@ -77,14 +73,12 @@ class CaptureManager:
             self._frame_buffer.append(new_frame_data)
             # 如果緩衝區超過設定大小，移除最舊的幀 (頭部)
             while len(self._frame_buffer) > self._buffer_size:
-                # 移除最舊的 FrameData
                 oldest_frame = self._frame_buffer.pop(0)
                 # 如果 FrameData 中有需要顯式釋放的資源 (如 CUDA 內存)，在這裡處理
-                # jetson.utils.cudaFromNumpy 創建的 CUDA 影像生命週期由它管理，通常不需要手動釋放
-                del oldest_frame # 釋放對舊幀數據的引用
+                # jetson_utils.cudaFromNumpy 創建的 CUDA 影像生命週期由它管理，通常不需要手動釋放
+                del oldest_frame
 
             # logger.debug(f"幀已添加到緩衝區，當前大小: {len(self._frame_buffer)}")
-
 
     def get_frame_buffer(self) -> List[FrameData]:
         """
@@ -97,7 +91,7 @@ class CaptureManager:
             return list(self._frame_buffer) # 返回列表的淺拷貝
 
     def capture_and_upload_image(self, event_type: str, frame_data: FrameData,
-                                 metadata: Dict[str, Any] = None):
+                                 metadata: Dict[str, Any] = None) -> str | None:
         """
         捕獲指定 FrameData 中的影像並添加到 S3 上傳佇列。
         Args:
@@ -122,7 +116,6 @@ class CaptureManager:
 
         # 將影像編碼為 JPG 格式的 Bytes
         try:
-            # 壓縮品質可調整 (e.g., [int(cv2.IMWRITE_JPEG_QUALITY), 90])
             ret, buffer = cv2.imencode('.jpg', frame_to_save)
             if not ret:
                 logger.error(f"影像編碼失敗: {s3_key}")
@@ -137,12 +130,12 @@ class CaptureManager:
             self.s3_uploader.put_upload_task(image_data, s3_key)
             logger.info(f"已將影像捕獲任務添加到 S3 上傳佇列，S3 Key: {s3_key}")
             # 返回完整的 S3 URL 或 Key，供事件發布器使用
-            bucket_name = self.s3_settings.get('bucket_name') # 確保 bucket_name 可用
+            bucket_name = self.s3_settings.get('bucket_name')
             if bucket_name:
                 return f"s3://{bucket_name}/{s3_key}"
             else:
                  logger.error("S3 bucket_name 未設定。無法生成 S3 URL。")
-                 return None # 如果沒有 bucket_name，無法構成完整 S3 URL
+                 return None
         except Exception as e:
             logger.error(f"添加上傳任務到佇列時發生錯誤: {e}", exc_info=True)
             return None
