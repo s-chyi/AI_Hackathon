@@ -4,7 +4,7 @@ import logging
 import json
 from typing import Dict, Any
 from datetime import datetime
-from .aws_iot_client import AWSIoTClient # 引入 IoT 客戶端
+from iot_client.aws_iot_client import AWSIoTClient # 引入 IoT 客戶端
 
 logger = logging.getLogger(__name__)
 
