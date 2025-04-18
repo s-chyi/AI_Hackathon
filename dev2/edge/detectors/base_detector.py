@@ -41,13 +41,13 @@ class BaseDetector:
         if not self.is_enabled:
             logger.info(f"偵測器 '{self.__class__.__name__}' 已禁用。")
 
-    def process(self, frame_cuda: jetson.utils.cudaImage, detections_raw: List[jetson.inference.Detection]):
+    def process(self, frame_cuda: jetson.utils.cudaImage, detections_raw: List):
         """
         處理單個影像幀和原始偵測結果。
         這是核心邏輯，應由子類實現。
         Args:
             frame_cuda (jetson.utils.cudaImage): 當前幀的 CUDA 影像數據。
-            detections_raw (List[jetson.inference.Detection]): 物件偵測模型輸出的原始偵測結果列表。
+            detections_raw (List): 物件偵測模型輸出的原始偵測結果列表。
         """
         if not self.is_enabled:
             return
