@@ -72,9 +72,20 @@ class BaseDetector:
             s3_path = self.capture_manager.capture_and_upload_image(event_type, metadata)
 
             # 如果影像成功添加到上傳佇列 (即使尚未完成上傳)，發布事件訊息
+            # 注意：這裡只檢查 s3_path 是否為 None，表示捕獲管理器是否成功創建了上傳任務
+            # 上傳任務本身可能還在執行中或失敗
             if s3_path is not None:
-                self.event_publisher.publish_event(event_type, s3_path=s3_path, metadata=metadata)
+                # 修正：將關鍵字參數名稱從 s3_path 改為 s3_image_path
+                self.event_publisher.publish_event(event_type, s3_image_path=s3_path, metadata=metadata)
                 self.event_manager.record_event_triggered(event_type) # 記錄觸發時間
+            else:
+                 # 如果 capture_and_upload_image 返回 None (表示捕獲或添加到佇列失敗)
+                 # 這裡可以選擇是否仍然發布一個不包含影像路徑的事件，或者完全不發布
+                 # 目前的邏輯是如果不包含路徑就不發布，可以根據需求調整
+                 logger.warning(f"未能捕獲或添加到佇列影像用於事件 '{event_type}'，跳過發布事件訊息。")
+                 # 如果需要即使沒有影像也發布事件，取消註釋下面一行
+                 # self.event_publisher.publish_event(event_type, metadata=metadata)
+                 # self.event_manager.record_event_triggered(event_type) # 記錄觸發時間 (如果決定發布事件)
 
 # 可擴展其他基類方法，例如根據 ROI 判斷目標是否在區域內
 # def is_in_roi(self, detection: jetson.inference.Detection, roi: list) -> bool:
