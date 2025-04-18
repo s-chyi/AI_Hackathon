@@ -1,6 +1,7 @@
 # utils/cuda_utils.py
 
 import jetson.utils
+import numpy as np
 
 def numpy_to_cuda(image_np: np.ndarray) -> jetson.utils.cudaImage:
     """
