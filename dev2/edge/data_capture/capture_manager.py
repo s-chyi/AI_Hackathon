@@ -36,7 +36,7 @@ class CaptureManager:
         self._current_frame = frame
         self._frame_timestamp = time.time()
 
-    def capture_and_upload_image(self, event_type: str, metadata: Dict[str, Any] = None) -> str | None:
+    def capture_and_upload_image(self, event_type: str, metadata: Dict[str, Any] = None):
         """
         捕獲當前影像並添加到 S3 上傳佇列。
         Args:
