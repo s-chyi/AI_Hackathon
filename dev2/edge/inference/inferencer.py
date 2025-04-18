@@ -45,7 +45,7 @@ class ObjectDetector(BaseInferencer):
         Args:
             frame_cuda (jetson.utils.cudaImage): CUDA 影像數據。
         Returns:
-            List[jetson.inference.Detection]: 偵測結果列表。
+            List: 偵測結果列表。
         """
         if not isinstance(self.model, jetson.inference.detectNet):
              logger.error("指定的模型不是 jetson.inference.detectNet 類型。")

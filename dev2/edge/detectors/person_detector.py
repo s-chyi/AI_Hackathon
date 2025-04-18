@@ -27,12 +27,12 @@ class PersonDetector(BaseDetector):
         # 可以在這裡初始化更複雜的狀態（例如人員跟蹤、計數）
         # self._tracked_persons = {} # 範例：用於跟蹤人員 ID
 
-    def process(self, frame_cuda: jetson.utils.cudaImage, detections_raw: List[jetson.inference.Detection]):
+    def process(self, frame_cuda: jetson.utils.cudaImage, detections_raw: List):
         """
         處理人員偵測邏輯。
         Args:
             frame_cuda (jetson.utils.cudaImage): 當前幀的 CUDA 影像數據。
-            detections_raw (List[jetson.inference.Detection]): 物件偵測模型輸出的原始偵測結果列表。
+            detections_raw (List): 物件偵測模型輸出的原始偵測結果列表。
         """
         if not self.is_enabled:
             return
