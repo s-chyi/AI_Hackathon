@@ -35,6 +35,8 @@ from data_capture.capture_manager import CaptureManager, FrameData
 from detectors.person_detector import PersonDetector
 from detectors.cargo_detector import CargoDetector # 引入 CargoDetector
 
+# 新增：引入 QR 掃描工具
+from utils import qr_scanner
 
 # 配置 logging (這部分可以在載入設定之前完成基礎配置)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s')
@@ -45,7 +47,7 @@ stop_requested = threading.Event()
 
 # 全域共享變數：儲存最新的雲端識別結果
 # 使用鎖保護，因為可能被不同執行緒訪問
-latest_recognition_result = {"person_id": "no_person", "timestamp": 0} # 初始化為無人狀態
+latest_recognition_result = {"person_id": "no_person", "timestamp": 0, "original_event_timestamp": 0, "match_confidence": None, "summary": None} # 增加更多字段
 recognition_result_lock = threading.Lock()
 
 def signal_handler(signum, frame):
@@ -68,11 +70,11 @@ def handle_recognition_result(topic, payload_str):
         # 更新全局共享的最新識別結果狀態
         with recognition_result_lock:
             latest_recognition_result["person_id"] = person_id
-            latest_recognition_result["timestamp"] = time.time() # 記錄收到結果的時間
-            latest_recognition_result["original_event_timestamp"] = original_timestamp # 記錄邊緣事件的時間戳
-            # 可以儲存更多結果信息，如 confidence, summary 等
+            latest_recognition_result["timestamp"] = time.time() # 記錄收到結果的時間 (Unix)
+            latest_recognition_result["original_event_timestamp"] = original_timestamp # 邊緣事件的時間戳 (保持原始格式)
             latest_recognition_result["match_confidence"] = result_data.get("match_confidence")
             latest_recognition_result["summary"] = result_data.get("summary")
+            latest_recognition_result["face_bbox_rekognition"] = result_data.get("face_bbox_rekognition") # 添加雲端識別人臉
 
         logger.info(f"已更新最新識別結果狀態：{latest_recognition_result}")
 
@@ -202,18 +204,29 @@ def main():
              logger.warning("物件偵測器未成功初始化，無法初始化 PersonDetector。")
 
 
+    # CargoDetector 的初始化 (傳入共享狀態和鎖)
     if detector_settings.get('cargo', {}).get('enabled', False):
         logger.info("初始化貨物偵測器...")
-        # CargoDetector 不變
         if object_detector_inferencer: # CargoDetector 也依賴 object_detector
-            cargo_detector = CargoDetector(
-                settings=detector_settings['cargo'],
-                object_detector=object_detector_inferencer,
-                event_manager=event_manager,
-                event_publisher=event_publisher,
-                capture_manager=capture_manager
-            )
-            detectors.append(cargo_detector)
+             # 檢查 CargoDetector 必要的設定
+             cargo_settings = detector_settings['cargo']
+             # allowed_person_ids 是列表，recognition_result_validity_sec 是數字
+             if 'allowed_person_ids' not in cargo_settings or 'recognition_result_validity_sec' not in cargo_settings:
+                  logger.warning("CargoDetector 設定不完整 (缺少 allowed_person_ids 或 recognition_result_validity_sec)。")
+                  # 可以選擇不初始化 CargoDetector 或在內部處理缺失設定
+                  pass # 繼續初始化，在 CargoDetector 內部處理缺失設定
+
+             cargo_detector = CargoDetector(
+                 settings=detector_settings['cargo'],
+                 object_detector=object_detector_inferencer,
+                 event_manager=event_manager,
+                 event_publisher=event_publisher,
+                 capture_manager=capture_manager,
+                 # 新增：傳入共享的識別結果狀態和鎖
+                 recognition_result_state=latest_recognition_result,
+                 recognition_result_lock=recognition_result_lock
+             )
+             detectors.append(cargo_detector)
         else:
              logger.warning("物件偵測器未成功初始化，無法初始化 CargoDetector。")
 

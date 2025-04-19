@@ -16,8 +16,11 @@ class EventType(Enum):
     PERSON_FALL_DETECTED = "PERSON_FALL_DETECTED"     # 偵測到人員跌倒 (需要姿勢估計模型)
     PERSON_IDLE_TOO_LONG = "PERSON_IDLE_TOO_LONG"     # 人員長時間靜止 (需要時間跟蹤)
 
+    # 貨物處理相關事件
+    CARGO_INFO_FOR_PROCESSING = "CARGO_INFO_FOR_PROCESSING" # <-- 新增事件，通知雲端處理貨物信息並決定位置
+
     # 貨物相關事件
-    CARGO_DETECTED = "CARGO_DETECTED"             # 偵測到貨物
+    # CARGO_DETECTED = "CARGO_DETECTED"             # 偵測到貨物
     CARGO_TILTED = "CARGO_TILTED"                 # 貨物傾斜 (需要更精確模型)
     CARGO_OUT_OF_BOUNDS = "CARGO_OUT_OF_BOUNDS"   # 貨物超出允許區域 (需要區域設定)
     QR_CODE_SCANNED = "QR_CODE_SCANNED"           # QR Code 掃描成功
