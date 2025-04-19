@@ -144,7 +144,6 @@ class CargoDetector(BaseDetector):
         # 篩選出貨物偵測結果，並只考慮在 ROI 內的貨物
         cargo_detections = []
         if self.cargo_class_names: # 確保有配置貨物類別名稱
-            logger.info(f"raw data: {detections_raw}")
             cargo_detections_raw = [
                 det for det in detections_raw
                 if det and self.object_detector.class_mapping.get(det.ClassID) in self.cargo_class_names

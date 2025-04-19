@@ -241,8 +241,8 @@ def main():
     camera_codec = camera_settings.get('codec', 'MJPG')
 
     cap = cv2.VideoCapture(camera_source)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
+    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, camera_width)
+    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_height)
     fourcc_code = cv2.VideoWriter_fourcc(*camera_codec)
     cap.set(cv2.CAP_PROP_FOURCC, fourcc_code)
 
