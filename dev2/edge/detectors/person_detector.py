@@ -6,7 +6,7 @@ import time # 添加 time 模組用於時間戳
 from typing import List, Dict, Optional, Any
 # 修正：將舊的導入方式改為新的帶底線的方式
 # import jetson.inference # <-- 移除這行或註釋掉
-import jetson_inference   # <-- 改為導入新的庫
+import jetson.inference   # <-- 改為導入新的庫
 import jetson.utils
 from events.event_types import EventType
 from events.event_manager import EventManager
@@ -62,7 +62,7 @@ class PersonDetector(BaseDetector):
         在偵測到人物後，觸發雲端進行人臉識別的事件。
         Args:
             frame_cuda (jetson.utils.cudaImage): 當前幀的 CUDA 影像數據。
-            detections_raw (List[Any]): 物件偵測模型輸出的原始偵測結果列表 (預期類型為 List[jetson_inference.Detection])。
+            detections_raw (List[Any]): 物件偵測模型輸出的原始偵測結果列表 (預期類型為 List[jetson.inference.Detection])。
         """
         if not self.is_enabled:
             return
@@ -70,7 +70,7 @@ class PersonDetector(BaseDetector):
         # 篩選出人員偵測結果
         person_detections = [
             det for det in detections_raw
-            if isinstance(det, jetson_inference.Detection) and self.object_detector.class_mapping.get(det.ClassID) == self.person_class_name
+            if det and self.object_detector.class_mapping.get(det.ClassID) == self.person_class_name
         ]
 
         # --------------------------------------------------------------------
