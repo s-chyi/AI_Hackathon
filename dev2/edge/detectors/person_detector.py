@@ -100,20 +100,20 @@ class PersonDetector(BaseDetector):
 
                 if current_frame_data:
                     # 修正：調用 capture_and_upload_image 時傳入人臉識別檔案夾前綴
-                    if self.s3_face_recognition_folder:
-                        s3_image_path = self.capture_manager.capture_and_upload_image(
-                            event_type,
-                            current_frame_data,
-                            self.s3_face_recognition_folder, # <-- 傳入人臉識別檔案夾
-                            metadata
-                        )
-                        if s3_image_path:
-                            self.event_publisher.publish_event(event_type, s3_image_path=s3_image_path, metadata=metadata)
-                            self.event_manager.record_event_triggered(cooldown_key)
-                        else:
-                            logger.warning(f"未能捕獲或添加到佇列影像用於事件 '{event_type}'。跳過發布事件訊息。")
+                    # if self.s3_face_recognition_folder:
+                    s3_image_path = self.capture_manager.capture_and_upload_image(
+                        event_type,
+                        current_frame_data,
+                        self.s3_face_recognition_folder, # <-- 傳入人臉識別檔案夾
+                        metadata
+                    )
+                    if s3_image_path:
+                        self.event_publisher.publish_event(event_type, s3_image_path=s3_image_path, metadata=metadata)
+                        self.event_manager.record_event_triggered(cooldown_key)
                     else:
-                        logger.error("未設定人臉識別影像 S3 檔案夾，跳過捕獲和發布事件。")
+                        logger.warning(f"未能捕獲或添加到佇列影像用於事件 '{event_type}'。跳過發布事件訊息。")
+                    # else:
+                    #     logger.error("未設定人臉識別影像 S3 檔案夾，跳過捕獲和發布事件。")
                 else:
                      logger.error("捕獲管理器緩衝區為空，無法捕獲影像用於事件觸發。")
 
