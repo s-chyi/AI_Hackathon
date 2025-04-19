@@ -53,6 +53,11 @@ class PersonDetector(BaseDetector):
         # 新增：從設定中獲取是否在偵測到人物時觸發雲端識別事件
         self.alert_on_person_detection = self.settings.get('alert_on_person_detection', True)
 
+        # 新增：獲取人臉識別影像的 S3 檔案夾前綴
+        self.s3_face_recognition_folder = self.capture_manager.s3_settings.get('s3_face_recognition_folder')
+        if not self.s3_face_recognition_folder:
+             logger.error("settings.yaml 中未設定 aws.s3.s3_face_recognition_folder。人臉識別影像將無法正確上傳。")
+
         logger.info("PersonDetector 初始化成功 (觸發雲端人臉識別)。")
 
     # 修正：將 detections_raw 的類型提示從 List 改為 List[Any] 並在註釋中說明
@@ -77,38 +82,38 @@ class PersonDetector(BaseDetector):
         # 規則範例 1: 偵測到至少一人，觸發雲端人臉識別事件
         # --------------------------------------------------------------------
         if self.alert_on_person_detection and len(person_detections) > 0:
-            # 觸發 PERSON_FOR_IDENTIFICATION 事件，通知雲端進行人臉識別
             event_type = EventType.PERSON_FOR_IDENTIFICATION.value
-            cooldown_key = event_type # 可以根據需要設置更精細的冷卻鍵 (例如按區域)
+            cooldown_key = event_type
 
-            # 檢查事件冷卻時間
             if self.event_manager.should_trigger_event(cooldown_key, cooldown_override=self.cooldown_seconds):
                 logger.info(f"事件 '{event_type}' 觸發。")
 
-                # 構建元數據 (包含偵測到的人物框信息，方便雲端處理)
                 metadata: Dict[str, Any] = {
-                    "person_count_in_frame": len(person_detections), # 這幀偵測到的人數
-                    # 這裡只發送第一個偵測到的人員框，雲端可以根據需要處理所有人員框
+                    "person_count_in_frame": len(person_detections),
                     "person_detection_bbox": [int(person_detections[0].Left), int(person_detections[0].Top), int(person_detections[0].Right), int(person_detections[0].Bottom)] if person_detections else None,
-                    "person_detection_confidence": float(person_detections[0].Confidence) if person_detections else None, # 附加物件偵測信心度
-                    "frame_timestamp": time.time() # 當前幀的時間戳
+                    "person_detection_confidence": float(person_detections[0].Confidence) if person_detections else None,
+                    "frame_timestamp": time.time()
                 }
 
-                # 獲取當前幀數據用於捕獲 (從 capture_manager 獲取最新一幀)
                 frame_buffer = self.capture_manager.get_frame_buffer()
-                current_frame_data = frame_buffer[-1] if frame_buffer else None # 獲取緩衝區中最後一幀
+                current_frame_data = frame_buffer[-1] if frame_buffer else None
 
                 if current_frame_data:
-                     # 捕獲並上傳當前幀影像 (CaptureManager 會將 S3 路徑加入 metadata)
-                     s3_image_path = self.capture_manager.capture_and_upload_image(event_type, current_frame_data, metadata)
-                     # 如果影像成功添加到上傳佇列 (即使尚未完成上傳)，則發布事件訊息
-                     if s3_image_path:
-                         # EventPublisher 會自動將 s3_image_path 包含在 payload 中
-                         self.event_publisher.publish_event(event_type, s3_image_path=s3_image_path, metadata=metadata)
-                         # 記錄事件觸發時間 (用於冷卻)
-                         self.event_manager.record_event_triggered(cooldown_key)
-                     else:
-                         logger.warning(f"未能捕獲或添加到佇列影像用於事件 '{event_type}'。跳過發布事件訊息。")
+                    # 修正：調用 capture_and_upload_image 時傳入人臉識別檔案夾前綴
+                    if self.s3_face_recognition_folder:
+                        s3_image_path = self.capture_manager.capture_and_upload_image(
+                            event_type,
+                            current_frame_data,
+                            self.s3_face_recognition_folder, # <-- 傳入人臉識別檔案夾
+                            metadata
+                        )
+                        if s3_image_path:
+                            self.event_publisher.publish_event(event_type, s3_image_path=s3_image_path, metadata=metadata)
+                            self.event_manager.record_event_triggered(cooldown_key)
+                        else:
+                            logger.warning(f"未能捕獲或添加到佇列影像用於事件 '{event_type}'。跳過發布事件訊息。")
+                    else:
+                        logger.error("未設定人臉識別影像 S3 檔案夾，跳過捕獲和發布事件。")
                 else:
                      logger.error("捕獲管理器緩衝區為空，無法捕獲影像用於事件觸發。")
 

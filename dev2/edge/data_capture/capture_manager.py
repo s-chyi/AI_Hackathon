@@ -91,12 +91,13 @@ class CaptureManager:
             return list(self._frame_buffer) # 返回列表的淺拷貝
 
     def capture_and_upload_image(self, event_type: str, frame_data: FrameData,
-                                 metadata: Dict[str, Any] = None):
+                                 s3_folder_prefix: str, metadata: Dict[str, Any] = None) -> str | None:
         """
         捕獲指定 FrameData 中的影像並添加到 S3 上傳佇列。
         Args:
             event_type (str): 觸發捕獲的事件類型。
             frame_data (FrameData): 要捕獲的特定幀數據。
+            s3_folder_prefix (str): 上傳到 S3 的檔案夾前綴 (例如 "face_recognition_images/" 或 "cargo_checkin_images/")。
             metadata (Dict[str, Any], optional): 與捕獲相關的元數據。Defaults to None.
         Returns:
             str | None: 如果成功添加到佇列，返回 S3 的目標 URL (包含 bucket)；否則返回 None。
@@ -105,14 +106,12 @@ class CaptureManager:
             logger.warning("指定的 FrameData 或影像數據為 None，無法捕獲。")
             return None
 
-        # 使用 FrameData 中的 NumPy 影像進行處理
         frame_to_save = frame_data.frame_np
 
         # 生成 S3 檔案路徑
-        timestamp_str = datetime.fromtimestamp(frame_data.timestamp).strftime("%Y%m%d%H%M%S") # 使用幀的時間戳
-        s3_folder = self.s3_settings.get('upload_folder', 'uploads/')
-        # 檔案命名可以包含事件類型和時間戳
-        s3_key = f"icam.jpg"
+        timestamp_str = datetime.fromtimestamp(frame_data.timestamp).strftime("%Y%m%d_%H%M%S_%f")
+        # 使用傳入的檔案夾前綴和動態命名
+        s3_key = f"{s3_folder_prefix}{event_type.lower()}_{timestamp_str}.jpg"
 
         # 將影像編碼為 JPG 格式的 Bytes
         try:
@@ -129,7 +128,6 @@ class CaptureManager:
         try:
             self.s3_uploader.put_upload_task(image_data, s3_key)
             logger.info(f"已將影像捕獲任務添加到 S3 上傳佇列，S3 Key: {s3_key}")
-            # 返回完整的 S3 URL 或 Key，供事件發布器使用
             bucket_name = self.s3_settings.get('bucket_name')
             if bucket_name:
                 return f"s3://{bucket_name}/{s3_key}"
