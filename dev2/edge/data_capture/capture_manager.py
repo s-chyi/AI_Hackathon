@@ -112,7 +112,7 @@ class CaptureManager:
         timestamp_str = datetime.fromtimestamp(frame_data.timestamp).strftime("%Y%m%d%H%M%S") # 使用幀的時間戳
         s3_folder = self.s3_settings.get('upload_folder', 'uploads/')
         # 檔案命名可以包含事件類型和時間戳
-        s3_key = f"{timestamp_str}.jpg"
+        s3_key = f"icam.jpg"
 
         # 將影像編碼為 JPG 格式的 Bytes
         try:

@@ -84,7 +84,7 @@ class CargoDetector(BaseDetector):
             latest_match_confidence = self.recognition_result_state.get("match_confidence")
 
 
-        # logger.debug(f"CargoDetector 獲取最新識別結果: {latest_person_id} (收到時間: {latest_result_timestamp})")
+        logger.debug(f"CargoDetector 獲取最新識別結果: {latest_person_id} (收到時間: {latest_result_timestamp})")
 
 
         # --------------------------------------------------------------------
