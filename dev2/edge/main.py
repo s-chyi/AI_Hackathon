@@ -312,13 +312,35 @@ def main():
         # 可選：在本地顯示處理後的影像
         # ... 顯示邏輯 (保持不變) ...
         if display_enabled:
-            # 如果需要顯示物件偵測框
-            frame_with_detections = draw_detections(
-                 frame_np.copy(),
-                 detections_raw,
-                 object_detector_inferencer.class_mapping
+            # 在 NumPy 影像上繪製物件偵測框
+            frame_to_display = draw_detections(
+                frame_np.copy(), # 在拷貝上繪製
+                detections_raw,
+                object_detector_inferencer.class_mapping
             )
-            display_frame = resize_for_display(frame_with_detections, display_width, display_height)
+
+            # 新增：如果 CargoDetector 啟用了並且有配置 ROI，則在顯示的幀上繪製 ROI
+            if cargo_detector and cargo_detector.is_enabled and cargo_detector.cargo_roi:
+                try:
+                    roi = cargo_detector.cargo_roi
+                    # 確保 ROI 是有效的 [x1, y1, x2, y2] 格式
+                    if isinstance(roi, list) and len(roi) == 4:
+                        # 使用 OpenCV 在畫面上繪製矩形
+                        # 座標需要是整數
+                        p1 = (int(roi[0]), int(roi[1]))
+                        p2 = (int(roi[2]), int(roi[3]))
+                        color = (0, 0, 255) # 紅色 (BGR 格式)
+                        thickness = 2
+                        cv2.rectangle(frame_to_display, p1, p2, color, thickness)
+                        # 可選：在框附近添加文本標籤
+                        # cv2.putText(frame_to_display, "Cargo ROI", p1, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    else:
+                        logger.warning(f"CargoDetector 配置的 ROI 格式無效: {roi}")
+                except Exception as e:
+                    logger.error(f"在顯示影像上繪製 Cargo ROI 時發生錯誤: {e}", exc_info=True)
+
+
+            display_frame = resize_for_display(frame_to_display, display_width, display_height)
             cv2.imshow("Edge Detection", display_frame)
 
             key = cv2.waitKey(1) & 0xFF
