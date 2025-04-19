@@ -91,7 +91,7 @@ class CaptureManager:
             return list(self._frame_buffer) # 返回列表的淺拷貝
 
     def capture_and_upload_image(self, event_type: str, frame_data: FrameData,
-                                 metadata: Dict[str, Any] = None) -> str | None:
+                                 metadata: Dict[str, Any] = None):
         """
         捕獲指定 FrameData 中的影像並添加到 S3 上傳佇列。
         Args:
