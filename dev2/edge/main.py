@@ -192,43 +192,43 @@ def main():
     if detector_settings.get('person', {}).get('enabled', False):
         logger.info("初始化人員偵測器...")
         if object_detector_inferencer:
-             person_detector = PersonDetector(
-                 settings=detector_settings['person'],
-                 object_detector=object_detector_inferencer,
-                 event_manager=event_manager,
-                 event_publisher=event_publisher,
-                 capture_manager=capture_manager
-             )
-             detectors.append(person_detector)
+            person_detector = PersonDetector(
+                settings=detector_settings['person'],
+                object_detector=object_detector_inferencer,
+                event_manager=event_manager,
+                event_publisher=event_publisher,
+                capture_manager=capture_manager
+            )
+            detectors.append(person_detector)
         else:
-             logger.warning("物件偵測器未成功初始化，無法初始化 PersonDetector。")
+            logger.warning("物件偵測器未成功初始化，無法初始化 PersonDetector。")
 
 
     # CargoDetector 的初始化 (傳入共享狀態和鎖)
     if detector_settings.get('cargo', {}).get('enabled', False):
         logger.info("初始化貨物偵測器...")
         if object_detector_inferencer: # CargoDetector 也依賴 object_detector
-             # 檢查 CargoDetector 必要的設定
-             cargo_settings = detector_settings['cargo']
-             # allowed_person_ids 是列表，recognition_result_validity_sec 是數字
-             if 'allowed_person_ids' not in cargo_settings or 'recognition_result_validity_sec' not in cargo_settings:
-                  logger.warning("CargoDetector 設定不完整 (缺少 allowed_person_ids 或 recognition_result_validity_sec)。")
-                  # 可以選擇不初始化 CargoDetector 或在內部處理缺失設定
-                  pass # 繼續初始化，在 CargoDetector 內部處理缺失設定
+            # 檢查 CargoDetector 必要的設定
+            cargo_settings = detector_settings['cargo']
+            # allowed_person_ids 是列表，recognition_result_validity_sec 是數字
+            if 'allowed_person_ids' not in cargo_settings or 'recognition_result_validity_sec' not in cargo_settings:
+                logger.warning("CargoDetector 設定不完整 (缺少 allowed_person_ids 或 recognition_result_validity_sec)。")
+                # 可以選擇不初始化 CargoDetector 或在內部處理缺失設定
+                pass # 繼續初始化，在 CargoDetector 內部處理缺失設定
 
-             cargo_detector = CargoDetector(
-                 settings=detector_settings['cargo'],
-                 object_detector=object_detector_inferencer,
-                 event_manager=event_manager,
-                 event_publisher=event_publisher,
-                 capture_manager=capture_manager,
-                 # 新增：傳入共享的識別結果狀態和鎖
-                 recognition_result_state=latest_recognition_result,
-                 recognition_result_lock=recognition_result_lock
-             )
-             detectors.append(cargo_detector)
+            cargo_detector = CargoDetector(
+                settings=detector_settings['cargo'],
+                object_detector=object_detector_inferencer,
+                event_manager=event_manager,
+                event_publisher=event_publisher,
+                capture_manager=capture_manager,
+                # 新增：傳入共享的識別結果狀態和鎖
+                recognition_result_state=latest_recognition_result,
+                recognition_result_lock=recognition_result_lock
+            )
+            detectors.append(cargo_detector)
         else:
-             logger.warning("物件偵測器未成功初始化，無法初始化 CargoDetector。")
+            logger.warning("物件偵測器未成功初始化，無法初始化 CargoDetector。")
 
     # TODO: 初始化其他偵測器
 

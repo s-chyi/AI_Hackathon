@@ -51,13 +51,13 @@ class CargoDetector(BaseDetector):
         # 貨物類別名稱 (可以是一個列表)
         self.cargo_class_names = self.settings.get('cargo_class_names')
         if not self.cargo_class_names:
-             # 如果未指定具體貨物類別名稱，則將所有非人物的類別視為貨物
-             all_classes = list(object_detector.class_mapping.values())
-             person_class = self.settings.get('class_name', 'person') # 獲取人物類別名
-             self.cargo_class_names = [cls for cls in all_classes if cls != person_class]
-             logger.info(f"CargoDetector 未指定具體貨物類別，將以下類別視為貨物: {self.cargo_class_names}")
-             if not self.cargo_class_names:
-                  logger.warning("CargoDetector 找不到任何非人物的類別映射，將無法偵測貨物。請檢查 class_mapping 設定。")
+            # 如果未指定具體貨物類別名稱，則將所有非人物的類別視為貨物
+            all_classes = list(object_detector.class_mapping.values())
+            person_class = self.settings.get('class_name', 'person') # 獲取人物類別名
+            self.cargo_class_names = [cls for cls in all_classes if cls != person_class]
+            logger.info(f"CargoDetector 未指定具體貨物類別，將以下類別視為貨物: {self.cargo_class_names}")
+            if not self.cargo_class_names:
+                logger.warning("CargoDetector 找不到任何非人物的類別映射，將無法偵測貨物。請檢查 class_mapping 設定。")
 
 
         self.cooldown_seconds = self.settings.get('cooldown_seconds', 30)
@@ -144,6 +144,7 @@ class CargoDetector(BaseDetector):
         # 篩選出貨物偵測結果，並只考慮在 ROI 內的貨物
         cargo_detections = []
         if self.cargo_class_names: # 確保有配置貨物類別名稱
+            logger.info(f"raw data: {detections_raw}")
             cargo_detections_raw = [
                 det for det in detections_raw
                 if det and self.object_detector.class_mapping.get(det.ClassID) in self.cargo_class_names
